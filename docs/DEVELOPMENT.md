@@ -82,7 +82,7 @@ Suggested responsibilities:
 Exit criteria:
 
 - `go test ./...` runs cleanly
-- `make run` starts a placeholder TUI
+- `just run` starts a placeholder TUI
 
 ### Milestone 2: Domain Model
 
@@ -176,8 +176,7 @@ v0.1 is ready when all of the following are true:
 
 ## Immediate Next Steps
 
-- initialize the Go module
-- pick the TUI stack and runtime logging package
-- design the first version of `config.yaml`
-- implement the tunnel profile structs and validation tests
-- build a placeholder TUI shell
+- add SSH command building
+- add Kubernetes command building
+- connect runtime state to the TUI
+- add start and stop actions from the UI

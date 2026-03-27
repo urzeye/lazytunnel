@@ -4,11 +4,11 @@ import (
 	"fmt"
 	"os"
 
-	"github.com/urzeye/lazytunnel/internal/app"
+	"github.com/urzeye/lazytunnel/internal/cli"
 )
 
 func main() {
-	if err := app.NewRootCommand().Execute(); err != nil {
+	if err := cli.NewRootCommand().Execute(); err != nil {
 		fmt.Fprintln(os.Stderr, err)
 		os.Exit(1)
 	}

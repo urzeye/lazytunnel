@@ -1,4 +1,4 @@
-package app
+package cli
 
 import (
 	"fmt"
@@ -6,6 +6,8 @@ import (
 	tea "github.com/charmbracelet/bubbletea"
 	"github.com/spf13/cobra"
 
+	"github.com/urzeye/lazytunnel/internal/app"
+	ltruntime "github.com/urzeye/lazytunnel/internal/runtime"
 	"github.com/urzeye/lazytunnel/internal/storage"
 	"github.com/urzeye/lazytunnel/internal/tui"
 )
@@ -24,8 +26,13 @@ func NewRootCommand() *cobra.Command {
 				return fmt.Errorf("load config %q: %w", configPath, err)
 			}
 
+			service, err := app.NewService(cfg, ltruntime.NewSupervisor(ltruntime.ExecProcessFactory{}))
+			if err != nil {
+				return fmt.Errorf("build app service: %w", err)
+			}
+
 			program := tea.NewProgram(
-				tui.NewModel(cfg, configPath),
+				tui.NewModel(service, configPath),
 				tea.WithAltScreen(),
 			)
 

@@ -82,7 +82,7 @@ pkg/
 完成标准：
 
 - `go test ./...` 能干净通过
-- `make run` 能启动一个占位版 TUI
+- `just run` 能启动一个占位版 TUI
 
 ### Milestone 2：领域模型
 
@@ -176,8 +176,7 @@ pkg/
 
 ## 接下来立刻要做的事
 
-- 初始化 Go module
-- 确定 TUI 栈和运行时日志方案
-- 设计第一版 `config.yaml`
-- 实现 tunnel profile 结构体和校验测试
-- 搭一个占位版 TUI 外壳
+- 增加 SSH 命令构造
+- 增加 Kubernetes 命令构造
+- 把运行时状态接进 TUI
+- 从界面触发启动和停止动作
