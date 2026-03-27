@@ -176,7 +176,7 @@ pkg/
 
 ## 接下来立刻要做的事
 
-- 增加 SSH 命令构造
-- 增加 Kubernetes 命令构造
-- 把运行时状态接进 TUI
-- 从界面触发启动和停止动作
+- 打磨 TUI 里的日志面板和状态细节
+- 补强 stack 相关快捷键和操作提示
+- 增加从 `~/.ssh/config` 和 Kubernetes context 导入
+- 接入 `goreleaser` 自动发布

@@ -176,7 +176,7 @@ v0.1 is ready when all of the following are true:
 
 ## Immediate Next Steps
 
-- add SSH command building
-- add Kubernetes command building
-- connect runtime state to the TUI
-- add start and stop actions from the UI
+- improve the logs panel and status details in the TUI
+- add stack-focused keyboard polish and clearer action hints
+- import from `~/.ssh/config` and Kubernetes contexts
+- add release automation with `goreleaser`

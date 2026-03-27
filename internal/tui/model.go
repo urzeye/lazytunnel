@@ -22,6 +22,12 @@ var (
 			Bold(true).
 			Foreground(lipgloss.Color("212")).
 			MarginTop(1)
+	focusedSectionStyle = lipgloss.NewStyle().
+				Bold(true).
+				Foreground(lipgloss.Color("230")).
+				Background(lipgloss.Color("62")).
+				Padding(0, 1).
+				MarginTop(1)
 	mutedStyle = lipgloss.NewStyle().
 			Foreground(lipgloss.Color("244"))
 	cardStyle = lipgloss.NewStyle().
@@ -38,15 +44,24 @@ var (
 
 type runtimeEventMsg ltruntime.Event
 
+type listFocus int
+
+const (
+	focusProfiles listFocus = iota
+	focusStacks
+)
+
 type Model struct {
-	service        *app.Service
-	configPath     string
-	subscriptionID int
-	events         <-chan ltruntime.Event
-	selected       int
-	width          int
-	height         int
-	lastError      string
+	service         *app.Service
+	configPath      string
+	subscriptionID  int
+	events          <-chan ltruntime.Event
+	selectedProfile int
+	selectedStack   int
+	focus           listFocus
+	width           int
+	height          int
+	lastError       string
 }
 
 func NewModel(service *app.Service, configPath string) Model {
@@ -74,26 +89,56 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		return m, waitForRuntimeEvent(m.events)
 
 	case tea.KeyMsg:
-		views := m.profileViews()
+		profiles := m.profileViews()
+		stacks := m.stackViews()
+
 		switch msg.String() {
 		case "q", "ctrl+c":
 			m.service.Unsubscribe(m.subscriptionID)
 			return m, tea.Quit
+		case "tab":
+			if len(stacks) > 0 {
+				if m.focus == focusProfiles {
+					m.focus = focusStacks
+				} else {
+					m.focus = focusProfiles
+				}
+			}
+		case "1":
+			m.focus = focusProfiles
+		case "2":
+			if len(stacks) > 0 {
+				m.focus = focusStacks
+			}
 		case "j", "down":
-			if len(views) > 0 && m.selected < len(views)-1 {
-				m.selected++
+			if m.focus == focusStacks {
+				if len(stacks) > 0 && m.selectedStack < len(stacks)-1 {
+					m.selectedStack++
+				}
+			} else if len(profiles) > 0 && m.selectedProfile < len(profiles)-1 {
+				m.selectedProfile++
 			}
 		case "k", "up":
-			if len(views) > 0 && m.selected > 0 {
-				m.selected--
+			if m.focus == focusStacks {
+				if len(stacks) > 0 && m.selectedStack > 0 {
+					m.selectedStack--
+				}
+			} else if len(profiles) > 0 && m.selectedProfile > 0 {
+				m.selectedProfile--
 			}
 		case "enter", "s":
-			if len(views) == 0 {
-				break
-			}
 			m.lastError = ""
-			if err := m.service.ToggleProfile(views[m.selected].Profile.Name); err != nil {
-				m.lastError = err.Error()
+			if m.focus == focusStacks && len(stacks) > 0 {
+				if err := m.service.ToggleStack(stacks[m.selectedStack].Stack.Name); err != nil {
+					m.lastError = err.Error()
+				}
+				return m, nil
+			}
+
+			if len(profiles) > 0 {
+				if err := m.service.ToggleProfile(profiles[m.selectedProfile].Profile.Name); err != nil {
+					m.lastError = err.Error()
+				}
 			}
 			return m, nil
 		}
@@ -103,25 +148,24 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 }
 
 func (m Model) View() string {
-	views := m.profileViews()
+	profiles := m.profileViews()
+	stacks := m.stackViews()
 
 	sections := []string{
 		titleStyle.Render("LazyTunnel"),
-		mutedStyle.Render("Keyboard-first tunnel workspace. Press Enter to start or stop the selected profile."),
+		mutedStyle.Render("Keyboard-first tunnel workspace. Use Tab to switch between profiles and stacks."),
 		cardStyle.Render(strings.Join([]string{
 			fmt.Sprintf("Config: %s", m.configPath),
-			fmt.Sprintf("Profiles: %d", len(views)),
-			fmt.Sprintf("Active: %d", countActive(views)),
+			fmt.Sprintf("Profiles: %d", len(profiles)),
+			fmt.Sprintf("Stacks: %d", len(stacks)),
+			fmt.Sprintf("Active: %d", countActiveProfiles(profiles)),
 		}, "\n")),
-		sectionStyle.Render("Profiles"),
-		m.renderProfiles(views),
-	}
-
-	if len(views) > 0 {
-		sections = append(sections,
-			sectionStyle.Render("Details"),
-			m.renderDetails(views[m.selected]),
-		)
+		renderSectionTitle("Profiles", m.focus == focusProfiles),
+		m.renderProfiles(profiles),
+		renderSectionTitle("Stacks", m.focus == focusStacks),
+		m.renderStacks(stacks),
+		renderSectionTitle("Details", false),
+		m.renderDetails(profiles, stacks),
 	}
 
 	if m.lastError != "" {
@@ -129,21 +173,46 @@ func (m Model) View() string {
 	}
 
 	sections = append(sections,
-		sectionStyle.Render("Hints"),
-		"↑/↓ or j/k to move, Enter or s to start/stop, q to quit.",
+		renderSectionTitle("Hints", false),
+		"Tab or 1/2 to switch lists, ↑/↓ or j/k to move, Enter or s to start/stop the selected item, q to quit.",
 	)
 
 	view := strings.Join(sections, "\n")
-	return appStyle.Width(max(m.width, 96)).Render(view)
+	return appStyle.Width(max(m.width, 100)).Render(view)
 }
 
 func (m Model) profileViews() []app.ProfileView {
 	views := m.service.ProfileViews()
-	if m.selected >= len(views) && len(views) > 0 {
-		m.selected = len(views) - 1
+	if len(views) == 0 {
+		m.selectedProfile = 0
+		return views
 	}
-	if m.selected < 0 {
-		m.selected = 0
+
+	if m.selectedProfile >= len(views) {
+		m.selectedProfile = len(views) - 1
+	}
+	if m.selectedProfile < 0 {
+		m.selectedProfile = 0
+	}
+
+	return views
+}
+
+func (m Model) stackViews() []app.StackView {
+	views := m.service.StackViews()
+	if len(views) == 0 {
+		m.selectedStack = 0
+		if m.focus == focusStacks {
+			m.focus = focusProfiles
+		}
+		return views
+	}
+
+	if m.selectedStack >= len(views) {
+		m.selectedStack = len(views) - 1
+	}
+	if m.selectedStack < 0 {
+		m.selectedStack = 0
 	}
 
 	return views
@@ -157,8 +226,10 @@ func (m Model) renderProfiles(views []app.ProfileView) string {
 	lines := make([]string, 0, len(views))
 	for idx, view := range views {
 		line := fmt.Sprintf("%s  %s  :%d", renderStatus(view.State.Status), view.Profile.Name, view.Profile.LocalPort)
-		if idx == m.selected {
+		if idx == m.selectedProfile && m.focus == focusProfiles {
 			line = selectedStyle.Render("> " + line)
+		} else if idx == m.selectedProfile {
+			line = "> " + line
 		} else {
 			line = "  " + line
 		}
@@ -168,7 +239,40 @@ func (m Model) renderProfiles(views []app.ProfileView) string {
 	return strings.Join(lines, "\n")
 }
 
-func (m Model) renderDetails(view app.ProfileView) string {
+func (m Model) renderStacks(views []app.StackView) string {
+	if len(views) == 0 {
+		return mutedStyle.Render("No stacks yet. Add stacks to your config to launch groups of tunnels together.")
+	}
+
+	lines := make([]string, 0, len(views))
+	for idx, view := range views {
+		line := fmt.Sprintf("%s  %s  %d/%d active", renderStackStatus(view.Status), view.Stack.Name, view.ActiveCount, len(view.Members))
+		if idx == m.selectedStack && m.focus == focusStacks {
+			line = selectedStyle.Render("> " + line)
+		} else if idx == m.selectedStack {
+			line = "> " + line
+		} else {
+			line = "  " + line
+		}
+		lines = append(lines, line)
+	}
+
+	return strings.Join(lines, "\n")
+}
+
+func (m Model) renderDetails(profiles []app.ProfileView, stacks []app.StackView) string {
+	if m.focus == focusStacks && len(stacks) > 0 {
+		return m.renderStackDetails(stacks[m.selectedStack])
+	}
+
+	if len(profiles) == 0 {
+		return cardStyle.Render("No profile selected.")
+	}
+
+	return m.renderProfileDetails(profiles[m.selectedProfile])
+}
+
+func (m Model) renderProfileDetails(view app.ProfileView) string {
 	spec, specErr := app.BuildProcessSpec(view.Profile)
 
 	details := []string{
@@ -183,6 +287,9 @@ func (m Model) renderDetails(view app.ProfileView) string {
 	}
 	if view.Profile.Description != "" {
 		details = append(details, fmt.Sprintf("Description: %s", view.Profile.Description))
+	}
+	if len(view.Profile.Labels) > 0 {
+		details = append(details, fmt.Sprintf("Labels: %s", strings.Join(view.Profile.Labels, ", ")))
 	}
 	if specErr == nil {
 		details = append(details, fmt.Sprintf("Command: %s", spec.DisplayCommand()))
@@ -205,6 +312,35 @@ func (m Model) renderDetails(view app.ProfileView) string {
 	return cardStyle.Render(strings.Join(details, "\n"))
 }
 
+func (m Model) renderStackDetails(view app.StackView) string {
+	details := []string{
+		fmt.Sprintf("Name: %s", view.Stack.Name),
+		fmt.Sprintf("Status: %s", view.Status),
+		fmt.Sprintf("Members: %d", len(view.Members)),
+		fmt.Sprintf("Active: %d", view.ActiveCount),
+	}
+
+	if view.Stack.Description != "" {
+		details = append(details, fmt.Sprintf("Description: %s", view.Stack.Description))
+	}
+	if len(view.Stack.Labels) > 0 {
+		details = append(details, fmt.Sprintf("Labels: %s", strings.Join(view.Stack.Labels, ", ")))
+	}
+
+	if len(view.Members) > 0 {
+		details = append(details, "Members:")
+		for _, member := range view.Members {
+			details = append(details, fmt.Sprintf("  %s  %s  :%d", renderStatus(member.State.Status), member.Profile.Name, member.Profile.LocalPort))
+		}
+	}
+
+	if view.Status == app.StackStatusPartial {
+		details = append(details, "Action: Enter will start the missing members.")
+	}
+
+	return cardStyle.Render(strings.Join(details, "\n"))
+}
+
 func waitForRuntimeEvent(events <-chan ltruntime.Event) tea.Cmd {
 	return func() tea.Msg {
 		event, ok := <-events
@@ -213,6 +349,14 @@ func waitForRuntimeEvent(events <-chan ltruntime.Event) tea.Cmd {
 		}
 		return runtimeEventMsg(event)
 	}
+}
+
+func renderSectionTitle(title string, focused bool) string {
+	if focused {
+		return focusedSectionStyle.Render(title)
+	}
+
+	return sectionStyle.Render(title)
 }
 
 func renderStatus(status domain.TunnelStatus) string {
@@ -232,7 +376,18 @@ func renderStatus(status domain.TunnelStatus) string {
 	}
 }
 
-func countActive(views []app.ProfileView) int {
+func renderStackStatus(status app.StackStatus) string {
+	switch status {
+	case app.StackStatusRunning:
+		return "RUN"
+	case app.StackStatusPartial:
+		return "PAR"
+	default:
+		return "STP"
+	}
+}
+
+func countActiveProfiles(views []app.ProfileView) int {
 	total := 0
 	for _, view := range views {
 		switch view.State.Status {
