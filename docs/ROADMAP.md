@@ -2,6 +2,8 @@
 
 This document tracks the early product direction for LazyTunnel.
 
+Execution plan: [Development Plan](DEVELOPMENT.md)
+
 ## MVP Scope
 
 The first usable version should focus on a small but high-value slice:
