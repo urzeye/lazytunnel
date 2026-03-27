@@ -18,7 +18,7 @@ This document turns the product roadmap into an execution plan.
 ## Suggested Tech Stack
 
 - CLI entry: `cobra`
-- TUI: `bubbletea`, `bubbles`, `lipgloss`
+- TUI: `bubbletea`, `lipgloss`, and `bubbles` as needed
 - logging: `slog` or `zap`
 - config format: YAML for app config, generated commands for runtime execution
 - releases: `goreleaser`
@@ -75,7 +75,7 @@ Suggested responsibilities:
 
 - initialize Go module
 - choose core libraries
-- add `Makefile`
+- add `justfile`
 - add formatter and lint commands
 - add a sample config file
 

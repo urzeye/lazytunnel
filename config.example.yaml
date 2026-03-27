@@ -1,0 +1,45 @@
+version: 1
+
+profiles:
+  - name: prod-db
+    description: Access the production database through an SSH bastion.
+    type: ssh_local
+    local_port: 5432
+    labels:
+      - prod
+      - db
+    restart:
+      enabled: true
+      max_retries: 0
+      initial_backoff: 2s
+      max_backoff: 30s
+    ssh:
+      host: bastion-prod
+      remote_host: db.internal
+      remote_port: 5432
+
+  - name: api-debug
+    description: Forward the API service from the dev cluster.
+    type: kubernetes_port_forward
+    local_port: 8080
+    labels:
+      - dev
+      - api
+    restart:
+      enabled: true
+      max_retries: 0
+      initial_backoff: 2s
+      max_backoff: 30s
+    kubernetes:
+      context: dev-cluster
+      namespace: backend
+      resource_type: service
+      resource: api
+      remote_port: 80
+
+stacks:
+  - name: backend-dev
+    description: Daily backend development stack.
+    profiles:
+      - prod-db
+      - api-debug

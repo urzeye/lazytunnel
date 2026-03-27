@@ -18,7 +18,7 @@
 ## 建议技术栈
 
 - CLI 入口：`cobra`
-- TUI：`bubbletea`、`bubbles`、`lipgloss`
+- TUI：`bubbletea`、`lipgloss`，按需引入 `bubbles`
 - 日志：`slog` 或 `zap`
 - 配置格式：应用配置使用 YAML，运行时动态生成实际命令
 - 发布：`goreleaser`
@@ -75,7 +75,7 @@ pkg/
 
 - 初始化 Go module
 - 确定核心依赖
-- 增加 `Makefile`
+- 增加 `justfile`
 - 增加格式化和 lint 命令
 - 增加示例配置文件
 
