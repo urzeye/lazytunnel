@@ -89,6 +89,36 @@ var (
 				Foreground(lipgloss.Color("230")).
 				Background(lipgloss.Color("62")).
 				Padding(0, 1)
+	filterInputIdleStyle = lipgloss.NewStyle().
+				Foreground(lipgloss.Color("252")).
+				Background(lipgloss.Color("236")).
+				Padding(0, 1)
+	filterInputActiveStyle = lipgloss.NewStyle().
+				Foreground(lipgloss.Color("230")).
+				Background(lipgloss.Color("24")).
+				Padding(0, 1)
+	filterPromptStyle = lipgloss.NewStyle().
+				Bold(true).
+				Foreground(lipgloss.Color("110"))
+	filterPlaceholderStyle = lipgloss.NewStyle().
+				Foreground(lipgloss.Color("244"))
+	headerMetaLabelStyle = lipgloss.NewStyle().
+				Foreground(lipgloss.Color("246"))
+	headerMetaSeparatorStyle = lipgloss.NewStyle().
+					Foreground(lipgloss.Color("240"))
+	headerSelectedValueStyle = lipgloss.NewStyle().
+					Bold(true).
+					Foreground(lipgloss.Color("230")).
+					Background(lipgloss.Color("24")).
+					Padding(0, 1)
+	headerSelectedEmptyValueStyle = lipgloss.NewStyle().
+					Foreground(lipgloss.Color("250")).
+					Background(lipgloss.Color("238")).
+					Padding(0, 1)
+	headerConfigValueStyle = lipgloss.NewStyle().
+				Foreground(lipgloss.Color("223")).
+				Background(lipgloss.Color("236")).
+				Padding(0, 1)
 	hintStyle = lipgloss.NewStyle().
 			Foreground(lipgloss.Color("246"))
 )
@@ -331,31 +361,26 @@ func (m Model) renderHeaderLines(profiles []app.ProfileView, stacks []app.StackV
 		width,
 	)
 
-	filterLabel := filterIdleStyle.Render("Filter")
-	filterValue := "name, label, target, port"
-	if m.filterQuery != "" {
-		filterLabel = filterActiveStyle.Render("Filter")
-		filterValue = m.filterQuery
-	}
-	if m.filterMode {
-		filterLabel = filterActiveStyle.Render("Filter typing")
-		if m.filterQuery == "" {
-			filterValue = "type to search..."
-		}
-	}
-
-	line2 := composeStyledLine(
-		filterLabel+" ",
-		fmt.Sprintf(
-			"%s | selected %s | config %s",
-			filterValue,
-			m.selectedLabel(profiles, stacks),
-			m.configPath,
-		),
-		width,
-	)
+	line2 := m.renderHeaderMetaLine(profiles, stacks, width)
 
 	return []string{line1, line2}
+}
+
+func (m Model) renderHeaderMetaLine(profiles []app.ProfileView, stacks []app.StackView, width int) string {
+	separator := headerMetaSeparatorStyle.Render(" | ")
+	filterSegment := m.renderHeaderFilterSegment(preferredFilterInputWidth(width))
+	selectedSegment := m.renderHeaderMetaField(
+		"selected",
+		m.selectedLabel(profiles, stacks),
+		m.selectedValueStyle(profiles, stacks),
+		preferredSelectedValueWidth(width),
+	)
+
+	usedWidth := lipgloss.Width(filterSegment) + lipgloss.Width(separator) + lipgloss.Width(selectedSegment) + lipgloss.Width(separator)
+	configValueWidth := max(8, width-usedWidth-headerMetaLabelWidth("config"))
+	configSegment := m.renderHeaderMetaField("config", m.configPath, headerConfigValueStyle, configValueWidth)
+
+	return filterSegment + separator + selectedSegment + separator + configSegment
 }
 
 func (m Model) renderStatusLine(width int) string {
@@ -1131,6 +1156,79 @@ func renderInlineBanner(style lipgloss.Style, text string, width int) string {
 
 func renderInlineText(style lipgloss.Style, text string, width int) string {
 	return renderSizedBlock(style, width, truncateText(text, max(1, width-style.GetHorizontalFrameSize())))
+}
+
+func preferredFilterInputWidth(totalWidth int) int {
+	return min(26, max(16, totalWidth/5))
+}
+
+func preferredSelectedValueWidth(totalWidth int) int {
+	return min(18, max(10, totalWidth/8))
+}
+
+func headerMetaLabelWidth(label string) int {
+	return lipgloss.Width(headerMetaLabelStyle.Render(label)) + 1
+}
+
+func renderHeaderValueChip(style lipgloss.Style, value string, width int) string {
+	width = max(style.GetHorizontalFrameSize()+1, width)
+	innerWidth := max(1, width-style.GetHorizontalFrameSize())
+	return renderSizedBlock(style, width, truncateText(value, innerWidth))
+}
+
+func (m Model) renderHeaderMetaField(label, value string, valueStyle lipgloss.Style, valueWidth int) string {
+	return lipgloss.JoinHorizontal(
+		lipgloss.Center,
+		headerMetaLabelStyle.Render(label),
+		" ",
+		renderHeaderValueChip(valueStyle, value, valueWidth),
+	)
+}
+
+func (m Model) renderHeaderFilterSegment(inputWidth int) string {
+	labelStyle := filterIdleStyle
+	inputStyle := filterInputIdleStyle
+	if m.filterMode || m.filterQuery != "" {
+		labelStyle = filterActiveStyle
+	}
+	if m.filterMode {
+		inputStyle = filterInputActiveStyle
+	}
+
+	value := m.filterQuery
+	valueStyle := sectionTextStyle
+	if value == "" {
+		if m.filterMode {
+			value = "type to filter"
+		} else {
+			value = "name, label, target"
+		}
+		valueStyle = filterPlaceholderStyle
+	}
+
+	innerWidth := max(1, inputWidth-inputStyle.GetHorizontalFrameSize())
+	prompt := filterPromptStyle.Render("/")
+	valueWidth := max(1, innerWidth-lipgloss.Width(prompt)-1)
+	content := lipgloss.JoinHorizontal(
+		lipgloss.Center,
+		prompt,
+		" ",
+		valueStyle.Render(truncateText(value, valueWidth)),
+	)
+
+	return lipgloss.JoinHorizontal(
+		lipgloss.Center,
+		labelStyle.Render("Filter"),
+		" ",
+		renderSizedBlock(inputStyle, inputWidth, content),
+	)
+}
+
+func (m Model) selectedValueStyle(profiles []app.ProfileView, stacks []app.StackView) lipgloss.Style {
+	if m.selectedLabel(profiles, stacks) == "none" {
+		return headerSelectedEmptyValueStyle
+	}
+	return headerSelectedValueStyle
 }
 
 func renderInspectorTab(label string, active bool) string {
