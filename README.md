@@ -26,6 +26,33 @@ Tunnel commands are powerful, but they are also annoying to manage in real life:
 
 LazyTunnel aims to make these workflows feel as smooth as `lazygit` and `lazydocker`, but for local development tunnels and temporary access paths.
 
+## Installation
+
+Install from source right now with Go. Tagged releases will also publish prebuilt archives on GitHub Releases, support `mise`, and include Linux `.deb` and `.rpm` packages.
+
+### Go
+
+```bash
+go install github.com/urzeye/lazytunnel/cmd/lazytunnel@latest
+```
+
+### GitHub Releases
+
+Tagged releases publish archives for macOS, Linux, and Windows on the
+[GitHub Releases page](https://github.com/urzeye/lazytunnel/releases).
+
+### mise
+
+If you use `mise`, tagged releases can be installed directly from GitHub:
+
+```bash
+mise use -g github:urzeye/lazytunnel
+```
+
+### Linux Packages
+
+Each tagged release also includes `.deb` and `.rpm` assets for Linux distributions that prefer native packages.
+
 ## Quick Start
 
 Initialize an empty config:
@@ -70,6 +97,12 @@ Validate your config:
 lazytunnel validate
 ```
 
+Launch the terminal UI:
+
+```bash
+lazytunnel
+```
+
 ## Key Features
 
 LazyTunnel is designed around a few strong workflows:
@@ -77,9 +110,8 @@ LazyTunnel is designed around a few strong workflows:
 - save tunnel profiles instead of retyping commands
 - start, stop, and restart tunnels with one key
 - monitor status, uptime, ports, and recent errors in one place
-- auto-reconnect dropped tunnels with backoff
 - group multiple tunnels into a stack and start them together
-- copy local URLs, host:port pairs, or connection strings quickly
+- detect local port conflicts before startup
 
 ## Supported Workflows
 
@@ -88,29 +120,11 @@ LazyTunnel is designed around a few strong workflows:
 - SSH dynamic proxy: `ssh -D`
 - Kubernetes port-forward for `pod`, `service`, and `deployment`
 
-## Planned Capabilities
+## Near-Term Roadmap
 
-- saved tunnel profiles
-- stacks for project-based startup
-- environment labels such as `dev`, `staging`, and `prod`
-- port conflict detection with suggestions
-- startup dependencies and preflight validation
-- import from `~/.ssh/config`
-- import from kube contexts and namespaces
-
-### Monitoring
-
-- live process status
-- uptime and reconnect counters
-- recent logs and exit reasons
-- health indicators for active tunnels
-
-### Convenience
-
-- copy local endpoint
-- copy DSN or connection snippets
-- open local URLs in the browser
-- fuzzy search across names, targets, and labels
+- richer runtime status, reconnect insight, and log surfaces in the TUI
+- better project stacks with labels and preflight validation
+- guided import flows for common SSH and Kubernetes setups
 
 ## Non-Goals
 

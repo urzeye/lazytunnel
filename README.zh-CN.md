@@ -26,6 +26,40 @@ LazyTunnel 是一个键盘优先的终端工作台，专门管理你每天会用
 
 LazyTunnel 想做的，就是把这类日常操作做成像 `lazygit`、`lazydocker` 一样顺手的开发者工具。
 
+## 安装
+
+当前最直接的安装方式是从源码安装：
+
+```bash
+go install github.com/urzeye/lazytunnel/cmd/lazytunnel@latest
+```
+
+后续打 tag 之后，GitHub Releases 会同时提供预编译二进制、`mise` 安装入口，以及 Linux 的 `.deb` / `.rpm` 包。
+
+### Go
+
+```bash
+go install github.com/urzeye/lazytunnel/cmd/lazytunnel@latest
+```
+
+### GitHub Releases
+
+每个带 tag 的版本都会在
+[GitHub Releases 页面](https://github.com/urzeye/lazytunnel/releases)
+发布 macOS、Linux、Windows 的预编译压缩包。
+
+### mise
+
+如果你在用 `mise`，后续可以直接从 GitHub Releases 安装：
+
+```bash
+mise use -g github:urzeye/lazytunnel
+```
+
+### Linux 包
+
+每个带 tag 的版本也会附带 `.deb` 和 `.rpm` 产物，方便偏好原生包管理方式的 Linux 发行版安装。
+
 ## 快速开始
 
 初始化一个空配置：
@@ -70,6 +104,12 @@ lazytunnel profile add kubernetes \
 lazytunnel validate
 ```
 
+启动终端 UI：
+
+```bash
+lazytunnel
+```
+
 ## 核心能力
 
 LazyTunnel 围绕几个高频场景来设计：
@@ -77,9 +117,8 @@ LazyTunnel 围绕几个高频场景来设计：
 - 保存 tunnel profile，而不是反复手敲命令
 - 一键启动、停止、重启 tunnel
 - 在一个界面里查看状态、运行时长、端口和最近错误
-- tunnel 意外断开后自动重连，并带退避策略
 - 把多条 tunnel 组合成一个 stack，按项目批量启动
-- 快速复制本地地址、`host:port` 或连接串
+- 在启动前识别本地端口冲突
 
 ## 支持的工作流
 
@@ -88,29 +127,11 @@ LazyTunnel 围绕几个高频场景来设计：
 - SSH 动态代理：`ssh -D`
 - Kubernetes `pod`、`service`、`deployment` 的端口转发
 
-## 计划能力
+## 近期路线
 
-- 保存 tunnel profile
-- 按项目组织 stack
-- 用 `dev`、`staging`、`prod` 这类标签区分环境
-- 检测端口冲突并给出建议
-- 启动前做依赖检查和预检查
-- 从 `~/.ssh/config` 导入现有 SSH 上下文
-- 从 kube context 和 namespace 导入现有 Kubernetes 上下文
-
-### 监控与状态
-
-- 实时进程状态
-- 运行时长和重连次数
-- 最近日志和退出原因
-- 活跃 tunnel 的健康指示
-
-### 便捷操作
-
-- 复制本地访问地址
-- 复制 DSN 或连接片段
-- 在浏览器中打开本地 URL
-- 按名称、目标地址、标签进行模糊搜索
+- 在 TUI 里补齐更完整的运行状态、重连信息和日志视图
+- 继续增强按项目组织 stack、标签和预检查能力
+- 为常见 SSH / Kubernetes 配置提供更顺手的导入流程
 
 ## 明确不做什么
 

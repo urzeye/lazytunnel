@@ -56,6 +56,7 @@ func NewRootCommand() *cobra.Command {
 		newValidateCommand(&configPath),
 		newProfileCommand(&configPath),
 		newStackCommand(&configPath),
+		newVersionCommand(),
 	)
 
 	return cmd

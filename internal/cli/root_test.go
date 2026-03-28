@@ -127,6 +127,32 @@ func TestStackAddPersistsStack(t *testing.T) {
 	}
 }
 
+func TestVersionCommandReportsBuildInfo(t *testing.T) {
+	t.Parallel()
+
+	output := executeCommand(t, "version")
+
+	for _, expected := range []string{
+		"version: dev",
+		"commit: none",
+		"built: unknown",
+		"os/arch:",
+	} {
+		if !strings.Contains(output, expected) {
+			t.Fatalf("expected output to contain %q, got %q", expected, output)
+		}
+	}
+}
+
+func TestVersionCommandShort(t *testing.T) {
+	t.Parallel()
+
+	output := executeCommand(t, "version", "--short")
+	if strings.TrimSpace(output) != "dev" {
+		t.Fatalf("expected short version output to be dev, got %q", output)
+	}
+}
+
 func executeCommand(t *testing.T, args ...string) string {
 	t.Helper()
 

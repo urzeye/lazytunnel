@@ -1,0 +1,74 @@
+version: 2
+
+project_name: lazytunnel
+
+before:
+  hooks:
+    - go test ./...
+
+builds:
+  - id: lazytunnel
+    main: ./cmd/lazytunnel
+    binary: lazytunnel
+    env:
+      - CGO_ENABLED=0
+    goos:
+      - darwin
+      - linux
+      - windows
+    goarch:
+      - amd64
+      - arm64
+    ldflags:
+      - -s -w
+      - -X github.com/urzeye/lazytunnel/internal/buildinfo.Version={{ .Version }}
+      - -X github.com/urzeye/lazytunnel/internal/buildinfo.Commit={{ .Commit }}
+      - -X github.com/urzeye/lazytunnel/internal/buildinfo.Date={{ .Date }}
+
+archives:
+  - id: packages
+    ids:
+      - lazytunnel
+    formats:
+      - tar.gz
+    format_overrides:
+      - goos: windows
+        formats:
+          - zip
+    name_template: >-
+      {{ .ProjectName }}_{{ .Version }}_{{ .Os }}_
+      {{- if eq .Arch "amd64" }}x86_64
+      {{- else if eq .Arch "386" }}i386
+      {{- else }}{{ .Arch }}{{ end }}
+    files:
+      - README.md
+      - README.zh-CN.md
+      - LICENSE
+
+checksum:
+  name_template: lazytunnel_checksums.txt
+
+snapshot:
+  version_template: "{{ incpatch .Version }}-next"
+
+changelog:
+  sort: desc
+  filters:
+    exclude:
+      - "^docs:"
+      - "^test:"
+      - "^chore:"
+
+nfpms:
+  - id: linux-packages
+    ids:
+      - lazytunnel
+    package_name: lazytunnel
+    description: Terminal UI for managing SSH tunnels and Kubernetes port-forwards.
+    homepage: https://github.com/urzeye/lazytunnel
+    maintainer: urzeye
+    license: MIT
+    formats:
+      - deb
+      - rpm
+    bindir: /usr/bin
