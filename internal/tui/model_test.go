@@ -237,6 +237,22 @@ func TestNextAvailableLocalPortSkipsUsedPorts(t *testing.T) {
 	}
 }
 
+func TestNextStackDraftNameAddsSuffixWhenNeeded(t *testing.T) {
+	t.Parallel()
+
+	cfg := domain.Config{
+		Version: domain.CurrentConfigVersion,
+		Stacks: []domain.Stack{
+			{Name: "draft-stack"},
+			{Name: "draft-stack-2"},
+		},
+	}
+
+	if got := nextStackDraftName(cfg, "draft-stack"); got != "draft-stack-3" {
+		t.Fatalf("nextStackDraftName() = %q, want %q", got, "draft-stack-3")
+	}
+}
+
 func TestCreateStarterProfileDraftPersistsAndSelects(t *testing.T) {
 	t.Parallel()
 
@@ -277,6 +293,107 @@ func TestCreateStarterProfileDraftPersistsAndSelects(t *testing.T) {
 	}
 	if cfg.Profiles[0].SSH == nil || cfg.Profiles[0].SSH.Host != "example-bastion" {
 		t.Fatalf("unexpected persisted profile: %#v", cfg.Profiles[0])
+	}
+}
+
+func TestCreateStarterStackDraftPersistsAndSelects(t *testing.T) {
+	t.Parallel()
+
+	configPath := filepath.Join(t.TempDir(), "config.yaml")
+	service, err := app.NewService(storage.SampleConfig(), newStubRuntimeController())
+	if err != nil {
+		t.Fatalf("new service: %v", err)
+	}
+
+	model := Model{
+		service:         service,
+		configPath:      configPath,
+		selectedProfile: 1,
+	}
+
+	profiles := filterProfileViews(service.ProfileViews(), "")
+	stacks := filterStackViews(service.StackViews(), "")
+	model = model.createStarterStackDraft(profiles, stacks)
+
+	if model.lastError != "" {
+		t.Fatalf("expected no error, got %q", model.lastError)
+	}
+	if !strings.Contains(model.lastNotice, "Created starter stack") {
+		t.Fatalf("expected creation notice, got %q", model.lastNotice)
+	}
+
+	stackViews := model.service.StackViews()
+	if len(stackViews) != 2 {
+		t.Fatalf("expected 2 stack views, got %d", len(stackViews))
+	}
+	if got := stackViews[model.selectedStack].Stack.Name; got != "draft-stack" {
+		t.Fatalf("expected selected stack draft-stack, got %q", got)
+	}
+	if got := strings.Join(stackViews[model.selectedStack].Stack.Profiles, ","); got != "api-debug" {
+		t.Fatalf("expected stack members api-debug, got %q", got)
+	}
+
+	cfg, err := storage.LoadConfig(configPath)
+	if err != nil {
+		t.Fatalf("load config: %v", err)
+	}
+	if len(cfg.Stacks) != 2 {
+		t.Fatalf("expected persisted draft stack, got %d stacks", len(cfg.Stacks))
+	}
+}
+
+func TestCreateStarterStackDraftNeedsVisibleProfile(t *testing.T) {
+	t.Parallel()
+
+	configPath := filepath.Join(t.TempDir(), "config.yaml")
+	service, err := app.NewService(storage.SampleConfig(), newStubRuntimeController())
+	if err != nil {
+		t.Fatalf("new service: %v", err)
+	}
+
+	model := Model{
+		service:     service,
+		configPath:  configPath,
+		filterQuery: "missing",
+	}
+
+	model = model.createStarterStackDraft(nil, nil)
+
+	if !strings.Contains(model.lastError, "No visible profile") {
+		t.Fatalf("expected visible profile error, got %q", model.lastError)
+	}
+}
+
+func TestCreateStarterStackDraftFromSelectedStackCopiesMembers(t *testing.T) {
+	t.Parallel()
+
+	configPath := filepath.Join(t.TempDir(), "config.yaml")
+	service, err := app.NewService(storage.SampleConfig(), newStubRuntimeController())
+	if err != nil {
+		t.Fatalf("new service: %v", err)
+	}
+
+	model := Model{
+		service:       service,
+		configPath:    configPath,
+		focus:         focusStacks,
+		selectedStack: 0,
+	}
+
+	profiles := filterProfileViews(service.ProfileViews(), "")
+	stacks := filterStackViews(service.StackViews(), "")
+	model = model.createStarterStackDraft(profiles, stacks)
+
+	if model.lastError != "" {
+		t.Fatalf("expected no error, got %q", model.lastError)
+	}
+
+	stackViews := model.service.StackViews()
+	if len(stackViews) != 2 {
+		t.Fatalf("expected 2 stack views, got %d", len(stackViews))
+	}
+	if got := strings.Join(stackViews[model.selectedStack].Stack.Profiles, ","); got != "prod-db,api-debug" {
+		t.Fatalf("expected copied members prod-db,api-debug, got %q", got)
 	}
 }
 

@@ -254,7 +254,7 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		{
 			var handled bool
 			var cmd tea.Cmd
-			m, cmd, handled = m.handleWorkspaceKey(msg)
+			m, cmd, handled = m.handleWorkspaceKey(msg, profiles, stacks)
 			if handled {
 				return m, cmd
 			}
@@ -424,17 +424,31 @@ func (m Model) renderHintLine(width int) string {
 		return ""
 	}
 
-	message := "/ filter  d delete  Tab/1/2 lists  j/k move  Enter/s toggle  h/l tabs  PgUp/PgDn scroll  q quit"
+	return renderInlineText(hintStyle, m.hintMessage(), width)
+}
+
+func (m Model) hintMessage() string {
 	switch {
 	case m.pendingDelete != nil:
-		message = "Delete mode: y or Enter confirms. n or Esc cancels."
+		return "Delete mode: y or Enter confirms. n or Esc cancels."
 	case m.filterMode:
-		message = "Filter mode: type to search. Enter finishes. Esc cancels. Backspace/Ctrl+W deletes. Ctrl+U clears."
+		return "Filter mode: type to search. Enter finishes. Esc cancels. Backspace/Ctrl+W deletes. Ctrl+U clears."
 	case m.workspaceIsEmpty():
-		message = "i init sample  a add draft profile  e edit config  r reload  / filter  q quit"
+		return "i init sample  a draft profile  e edit config  r reload  / filter  q quit"
 	}
 
-	return renderInlineText(hintStyle, message, width)
+	profileCount := len(m.service.ProfileViews())
+	stackCount := len(m.service.StackViews())
+	switch {
+	case profileCount == 0:
+		return "a draft profile  e edit config  r reload  / filter  q quit"
+	case stackCount == 0:
+		return "A draft stack  a draft profile  e edit config  r reload  / filter  q quit"
+	case m.focus == focusStacks:
+		return "Tab switch  Enter toggle stack  A draft stack  d delete  h/l tabs  / filter  q quit"
+	default:
+		return "Tab switch  Enter toggle  a draft profile  A draft stack  d delete  h/l tabs  / filter  q quit"
+	}
 }
 
 func (m Model) renderBody(profiles []app.ProfileView, stacks []app.StackView, width, height int) string {
@@ -519,10 +533,14 @@ func (m Model) renderStacksPanel(views []app.StackView, width, height int) strin
 
 	title := panelListTitle("Stacks", len(views), 0, len(views))
 	if len(views) == 0 {
-		message := "No stacks yet. Add stacks to your config to launch groups of tunnels together."
 		if m.filterQuery != "" {
-			message = fmt.Sprintf("No stacks match %q. Press Esc to clear the filter.", m.filterQuery)
+			message := fmt.Sprintf("No stacks match %q. Press Esc to clear the filter.", m.filterQuery)
+			return renderFixedPanel(title, []string{mutedStyle.Render(truncateText(message, innerWidth))}, width, height, focused)
 		}
+		if len(m.service.ProfileViews()) > 0 {
+			return renderFixedPanel(title, m.renderEmptyStacksLines(innerWidth), width, height, focused)
+		}
+		message := "No stacks yet. Add stacks to your config to launch groups of tunnels together."
 		return renderFixedPanel(title, []string{mutedStyle.Render(truncateText(message, innerWidth))}, width, height, focused)
 	}
 
@@ -863,7 +881,7 @@ func (m Model) handleFilterKey(msg tea.KeyMsg) (Model, bool) {
 	return m, true
 }
 
-func (m Model) handleWorkspaceKey(msg tea.KeyMsg) (Model, tea.Cmd, bool) {
+func (m Model) handleWorkspaceKey(msg tea.KeyMsg, profiles []app.ProfileView, stacks []app.StackView) (Model, tea.Cmd, bool) {
 	switch msg.String() {
 	case "r":
 		m = m.reloadConfigFromDisk("Reloaded config from disk.")
@@ -884,6 +902,9 @@ func (m Model) handleWorkspaceKey(msg tea.KeyMsg) (Model, tea.Cmd, bool) {
 		return m, nil, true
 	case "a":
 		m = m.createStarterProfileDraft()
+		return m, nil, true
+	case "A":
+		m = m.createStarterStackDraft(profiles, stacks)
 		return m, nil, true
 	default:
 		return m, nil, false
@@ -942,6 +963,36 @@ func (m Model) createStarterProfileDraft() Model {
 	return m
 }
 
+func (m Model) createStarterStackDraft(profiles []app.ProfileView, stacks []app.StackView) Model {
+	m.lastError = ""
+	m.lastNotice = ""
+
+	cfg := m.service.Config()
+	stack, err := starterStackDraft(cfg, profiles, stacks, m.focus, m.selectedProfile, m.selectedStack, m.filterQuery)
+	if err != nil {
+		m.lastError = err.Error()
+		return m
+	}
+
+	m.filterQuery = ""
+	m.filterMode = false
+	cfg.SetStack(stack)
+
+	if err := storage.SaveConfig(m.configPath, cfg); err != nil {
+		m.lastError = "Create starter stack: " + err.Error()
+		return m
+	}
+
+	m.service.ReplaceConfig(cfg)
+	m.focus = focusStacks
+	m.selectedProfile = 0
+	m.inspectorTab = inspectorTabDetails
+	m.inspectorScroll = 0
+	m.selectStackByName(stack.Name)
+	m.lastNotice = fmt.Sprintf("Created starter stack %s. Press e to refine the config.", stack.Name)
+	return m
+}
+
 func (m Model) reloadConfigFromDisk(successNotice string) Model {
 	m.lastError = ""
 	m.lastNotice = ""
@@ -970,6 +1021,17 @@ func (m *Model) selectProfileByName(name string) {
 		return
 	}
 	m.selectedProfile = 0
+}
+
+func (m *Model) selectStackByName(name string) {
+	for idx, view := range m.service.StackViews() {
+		if view.Stack.Name != name {
+			continue
+		}
+		m.selectedStack = idx
+		return
+	}
+	m.selectedStack = 0
 }
 
 func (m Model) ensureConfigFileExists() error {
@@ -1423,6 +1485,14 @@ func (m Model) renderEmptyProfilesLines(width int) []string {
 	}
 }
 
+func (m Model) renderEmptyStacksLines(width int) []string {
+	return []string{
+		composeStyledLine(renderActionChip("A", "draft stack")+"  ", renderActionChip("e", "edit config"), width),
+		composeStyledLine(renderActionChip("r", "reload")+"  ", renderActionChip("Tab", "focus profiles"), width),
+		mutedStyle.Render(truncateText("No stacks yet. Create one from the selected profile.", width)),
+	}
+}
+
 func (m Model) renderEmptyInspectorLines(width int) []string {
 	return []string{
 		groupTitleStyle.Render("Quick Start"),
@@ -1472,10 +1542,73 @@ func starterSSHProfileDraft(cfg domain.Config) domain.Profile {
 	}
 }
 
+func starterStackDraft(cfg domain.Config, profiles []app.ProfileView, stacks []app.StackView, focus listFocus, selectedProfile, selectedStack int, filterQuery string) (domain.Stack, error) {
+	members, sourceLabel, err := starterStackMembers(profiles, stacks, focus, selectedProfile, selectedStack, filterQuery, len(cfg.Profiles))
+	if err != nil {
+		return domain.Stack{}, err
+	}
+
+	stack := domain.Stack{
+		Name:        nextStackDraftName(cfg, "draft-stack"),
+		Description: fmt.Sprintf("Starter stack draft seeded from %s.", sourceLabel),
+		Labels:      []string{"draft"},
+		Profiles:    members,
+	}
+	return stack, nil
+}
+
+func starterStackMembers(profiles []app.ProfileView, stacks []app.StackView, focus listFocus, selectedProfile, selectedStack int, filterQuery string, totalProfiles int) ([]string, string, error) {
+	if focus == focusStacks && len(stacks) > 0 {
+		selectedStack = max(0, min(selectedStack, len(stacks)-1))
+		selected := stacks[selectedStack]
+		members := make([]string, 0, len(selected.Members))
+		for _, member := range selected.Members {
+			members = append(members, member.Profile.Name)
+		}
+		if len(members) == 0 {
+			return nil, "", fmt.Errorf("Selected stack has no resolved members to draft from.")
+		}
+		return members, "stack " + selected.Stack.Name, nil
+	}
+
+	if len(profiles) > 0 {
+		selectedProfile = max(0, min(selectedProfile, len(profiles)-1))
+		selected := profiles[selectedProfile]
+		return []string{selected.Profile.Name}, "profile " + selected.Profile.Name, nil
+	}
+
+	switch {
+	case totalProfiles == 0:
+		return nil, "", fmt.Errorf("Add a profile first, then press A to create a stack draft.")
+	case filterQuery != "":
+		return nil, "", fmt.Errorf("No visible profile to seed the stack. Clear the filter or select a profile first.")
+	default:
+		return nil, "", fmt.Errorf("Select a profile first, then press A to create a stack draft.")
+	}
+}
+
 func nextProfileDraftName(cfg domain.Config, base string) string {
 	names := make(map[string]struct{}, len(cfg.Profiles))
 	for _, profile := range cfg.Profiles {
 		names[profile.Name] = struct{}{}
+	}
+
+	if _, exists := names[base]; !exists {
+		return base
+	}
+
+	for idx := 2; ; idx++ {
+		candidate := fmt.Sprintf("%s-%d", base, idx)
+		if _, exists := names[candidate]; !exists {
+			return candidate
+		}
+	}
+}
+
+func nextStackDraftName(cfg domain.Config, base string) string {
+	names := make(map[string]struct{}, len(cfg.Stacks))
+	for _, stack := range cfg.Stacks {
+		names[stack.Name] = struct{}{}
 	}
 
 	if _, exists := names[base]; !exists {
