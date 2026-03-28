@@ -676,6 +676,8 @@ func (m Model) renderProfileDetailLines(view app.ProfileView, width int) []strin
 		renderCompactKeyValue("Restart", restartPolicySummary(view.Profile.Restart), width),
 	}
 
+	lines = append(lines, m.renderProfileStartLines(view, specErr, width)...)
+
 	configLines := make([]string, 0, 4)
 	if view.Profile.Description != "" {
 		configLines = append(configLines, renderCompactKeyValue("About", view.Profile.Description, width))
@@ -736,6 +738,8 @@ func (m Model) renderStackDetailLines(view app.StackView, width int) []string {
 			))
 		}
 	}
+
+	lines = append(lines, m.renderStackStartLines(view, width)...)
 
 	if missingProfiles := missingStackProfiles(view); len(missingProfiles) > 0 {
 		lines = append(lines, groupTitleStyle.Render("Problem"))
@@ -1611,6 +1615,71 @@ func renderActionChip(key, label string) string {
 	)
 }
 
+func (m Model) renderProfileStartLines(view app.ProfileView, specErr error, width int) []string {
+	if m.service == nil {
+		return nil
+	}
+
+	analysis, err := m.service.AnalyzeProfileStart(view.Profile.Name)
+	if err != nil {
+		return nil
+	}
+
+	lines := []string{
+		groupTitleStyle.Render("Start"),
+		renderCompactKeyValue("Readiness", profileStartSummary(analysis.Status), width),
+	}
+
+	excludedProblem := ""
+	if specErr != nil {
+		excludedProblem = specErr.Error()
+	}
+
+	for _, problem := range analysis.Problems {
+		if excludedProblem != "" && problem == excludedProblem {
+			continue
+		}
+		lines = append(lines, renderCompactKeyValue("Blocker", problem, width))
+	}
+
+	return lines
+}
+
+func (m Model) renderStackStartLines(view app.StackView, width int) []string {
+	if m.service == nil {
+		return nil
+	}
+
+	analysis, err := m.service.AnalyzeStackStart(view.Stack.Name)
+	if err != nil {
+		return nil
+	}
+
+	lines := []string{
+		groupTitleStyle.Render("Start Plan"),
+		renderCompactKeyValue("Readiness", stackStartSummary(view, analysis), width),
+		renderCompactKeyValue("Ready", formatCountNoun(analysis.ReadyCount, "member"), width),
+		renderCompactKeyValue("Running", formatCountNoun(analysis.ActiveCount, "member"), width),
+		renderCompactKeyValue("Blocked", formatCountNoun(analysis.BlockedCount, "member"), width),
+	}
+
+	if len(view.Stack.Profiles) == 0 {
+		lines = append(lines, renderCompactKeyValue("Blocker", "Add a profile to this stack first.", width))
+		return lines
+	}
+
+	for _, member := range analysis.Members {
+		if member.Status != app.StartReadinessBlocked {
+			continue
+		}
+		for _, problem := range member.Problems {
+			lines = append(lines, renderCompactKeyValue(member.ProfileName, problem, width))
+		}
+	}
+
+	return lines
+}
+
 func profileActionLines(view app.ProfileView, width int) []string {
 	toggleLabel := "start tunnel"
 	if isActiveTunnelStatus(view.State.Status) {
@@ -2163,6 +2232,41 @@ func missingStackProfiles(view app.StackView) []string {
 	}
 
 	return missing
+}
+
+func profileStartSummary(status app.StartReadiness) string {
+	switch status {
+	case app.StartReadinessActive:
+		return "Running now"
+	case app.StartReadinessReady:
+		return "Ready on Enter"
+	case app.StartReadinessBlocked:
+		return "Blocked"
+	default:
+		return "-"
+	}
+}
+
+func stackStartSummary(view app.StackView, analysis app.StackStartAnalysis) string {
+	switch {
+	case len(view.Stack.Profiles) == 0:
+		return "Blocked"
+	case analysis.BlockedCount > 0:
+		return "Blocked"
+	case analysis.ReadyCount > 0:
+		return "Ready for " + formatCountNoun(analysis.ReadyCount, "member")
+	case analysis.ActiveCount > 0:
+		return "Already running"
+	default:
+		return "Idle"
+	}
+}
+
+func formatCountNoun(count int, noun string) string {
+	if count == 1 {
+		return fmt.Sprintf("%d %s", count, noun)
+	}
+	return fmt.Sprintf("%d %ss", count, noun)
 }
 
 func formatPID(pid int) string {

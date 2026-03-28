@@ -99,6 +99,61 @@ func TestServiceToggleProfileStopsActiveTunnel(t *testing.T) {
 	}
 }
 
+func TestServiceAnalyzeProfileStartReportsConfigProblems(t *testing.T) {
+	t.Parallel()
+
+	cfg := testConfig()
+	cfg.Profiles = append(cfg.Profiles, domain.Profile{
+		Name:      "broken-ssh",
+		Type:      domain.TunnelTypeSSHLocal,
+		LocalPort: 15432,
+	})
+
+	service, err := NewService(cfg, newFakeRuntimeController(), WithPortChecker(fakePortChecker{}))
+	if err != nil {
+		t.Fatalf("new service: %v", err)
+	}
+
+	analysis, err := service.AnalyzeProfileStart("broken-ssh")
+	if err != nil {
+		t.Fatalf("analyze profile: %v", err)
+	}
+
+	if analysis.Status != StartReadinessBlocked {
+		t.Fatalf("expected blocked status, got %q", analysis.Status)
+	}
+	if len(analysis.Problems) == 0 || !strings.Contains(analysis.Problems[0], "ssh settings are required") {
+		t.Fatalf("expected ssh settings problem, got %#v", analysis.Problems)
+	}
+}
+
+func TestServiceAnalyzeProfileStartReportsManagedPortConflict(t *testing.T) {
+	t.Parallel()
+
+	runtime := newFakeRuntimeController()
+	runtime.statesByName["prod-db"] = domain.RuntimeState{
+		ProfileName: "prod-db",
+		Status:      domain.TunnelStatusRunning,
+	}
+
+	service, err := NewService(testConfig(), runtime, WithPortChecker(fakePortChecker{}))
+	if err != nil {
+		t.Fatalf("new service: %v", err)
+	}
+
+	analysis, err := service.AnalyzeProfileStart("redis-debug")
+	if err != nil {
+		t.Fatalf("analyze profile: %v", err)
+	}
+
+	if analysis.Status != StartReadinessBlocked {
+		t.Fatalf("expected blocked status, got %q", analysis.Status)
+	}
+	if len(analysis.Problems) == 0 || !strings.Contains(analysis.Problems[0], `local port 5432 is already used by active profile "prod-db"`) {
+		t.Fatalf("expected managed port conflict, got %#v", analysis.Problems)
+	}
+}
+
 func TestServiceProfileViewsIncludesDefaultStoppedState(t *testing.T) {
 	t.Parallel()
 
@@ -139,6 +194,56 @@ func TestServiceStackViewsExposePartialStatus(t *testing.T) {
 
 	if got := views[0].Status; got != StackStatusPartial {
 		t.Fatalf("expected partial stack status, got %q", got)
+	}
+}
+
+func TestServiceAnalyzeStackStartReportsReadyActiveAndBlockedMembers(t *testing.T) {
+	t.Parallel()
+
+	cfg := testConfig()
+	cfg.Stacks = []domain.Stack{
+		{
+			Name:     "mixed-dev",
+			Profiles: []string{"prod-db", "api-debug", "redis-debug", "missing-profile"},
+		},
+	}
+
+	runtime := newFakeRuntimeController()
+	runtime.statesByName["prod-db"] = domain.RuntimeState{
+		ProfileName: "prod-db",
+		Status:      domain.TunnelStatusRunning,
+	}
+
+	service, err := NewService(cfg, runtime, WithPortChecker(fakePortChecker{}))
+	if err != nil {
+		t.Fatalf("new service: %v", err)
+	}
+
+	analysis, err := service.AnalyzeStackStart("mixed-dev")
+	if err != nil {
+		t.Fatalf("analyze stack: %v", err)
+	}
+
+	if analysis.ActiveCount != 1 || analysis.ReadyCount != 1 || analysis.BlockedCount != 2 {
+		t.Fatalf("unexpected analysis counts: %#v", analysis)
+	}
+	if got := analysis.Members[0].Status; got != StartReadinessActive {
+		t.Fatalf("expected prod-db active, got %q", got)
+	}
+	if got := analysis.Members[1].Status; got != StartReadinessReady {
+		t.Fatalf("expected api-debug ready, got %q", got)
+	}
+	if got := analysis.Members[2].Status; got != StartReadinessBlocked {
+		t.Fatalf("expected redis-debug blocked, got %q", got)
+	}
+	if len(analysis.Members[2].Problems) == 0 || !strings.Contains(analysis.Members[2].Problems[0], `local port 5432 is already reserved by profile "prod-db"`) {
+		t.Fatalf("expected redis-debug reserved-port problem, got %#v", analysis.Members[2].Problems)
+	}
+	if got := analysis.Members[3].Status; got != StartReadinessBlocked {
+		t.Fatalf("expected missing-profile blocked, got %q", got)
+	}
+	if len(analysis.Members[3].Problems) == 0 || !strings.Contains(analysis.Members[3].Problems[0], `profile "missing-profile" not found`) {
+		t.Fatalf("expected missing-profile error, got %#v", analysis.Members[3].Problems)
 	}
 }
 

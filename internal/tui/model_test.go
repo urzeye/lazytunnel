@@ -60,22 +60,37 @@ func TestProfileTarget(t *testing.T) {
 func TestRenderProfileDetailLinesShowsConfigProblem(t *testing.T) {
 	t.Parallel()
 
-	model := Model{
-		now: time.Date(2026, 3, 28, 11, 0, 0, 0, time.UTC),
-	}
-
-	lines := model.renderProfileDetailLines(app.ProfileView{
-		Profile: domain.Profile{
-			Name:      "broken-ssh",
-			Type:      domain.TunnelTypeSSHLocal,
-			LocalPort: 15432,
-			Restart: domain.RestartPolicy{
-				Enabled: true,
+	service, err := app.NewService(domain.Config{
+		Version: domain.CurrentConfigVersion,
+		Profiles: []domain.Profile{
+			{
+				Name:      "broken-ssh",
+				Type:      domain.TunnelTypeSSHLocal,
+				LocalPort: 15432,
+				Restart: domain.RestartPolicy{
+					Enabled: true,
+				},
 			},
 		},
-	}, 80)
+	}, newStubRuntimeController())
+	if err != nil {
+		t.Fatalf("new service: %v", err)
+	}
+
+	model := Model{
+		service: service,
+		now:     time.Date(2026, 3, 28, 11, 0, 0, 0, time.UTC),
+	}
+
+	lines := model.renderProfileDetailLines(service.ProfileViews()[0], 80)
 
 	rendered := strings.Join(lines, "\n")
+	if !strings.Contains(rendered, "Start") {
+		t.Fatalf("expected start section, got %q", rendered)
+	}
+	if !strings.Contains(rendered, "Blocked") {
+		t.Fatalf("expected blocked readiness, got %q", rendered)
+	}
 	if !strings.Contains(rendered, "Problem") {
 		t.Fatalf("expected problem section, got %q", rendered)
 	}
@@ -87,18 +102,41 @@ func TestRenderProfileDetailLinesShowsConfigProblem(t *testing.T) {
 func TestRenderStackDetailLinesShowsMissingProfiles(t *testing.T) {
 	t.Parallel()
 
-	model := Model{}
-	lines := model.renderStackDetailLines(app.StackView{
-		Stack: domain.Stack{
-			Name:     "backend-dev",
-			Profiles: []string{"prod-db", "missing-api"},
+	service, err := app.NewService(domain.Config{
+		Version: domain.CurrentConfigVersion,
+		Profiles: []domain.Profile{
+			{
+				Name:      "prod-db",
+				Type:      domain.TunnelTypeSSHLocal,
+				LocalPort: 5432,
+				SSH: &domain.SSHLocal{
+					Host:       "bastion-prod",
+					RemoteHost: "db.internal",
+					RemotePort: 5432,
+				},
+			},
 		},
-		Members: []app.ProfileView{
-			{Profile: domain.Profile{Name: "prod-db", LocalPort: 5432}},
+		Stacks: []domain.Stack{
+			{
+				Name:     "backend-dev",
+				Profiles: []string{"prod-db", "missing-api"},
+			},
 		},
-	}, 80)
+	}, newStubRuntimeController())
+	if err != nil {
+		t.Fatalf("new service: %v", err)
+	}
+
+	model := Model{service: service}
+	lines := model.renderStackDetailLines(service.StackViews()[0], 80)
 
 	rendered := strings.Join(lines, "\n")
+	if !strings.Contains(rendered, "Start Plan") {
+		t.Fatalf("expected start plan section, got %q", rendered)
+	}
+	if !strings.Contains(rendered, "Blocked") {
+		t.Fatalf("expected blocked readiness, got %q", rendered)
+	}
 	if !strings.Contains(rendered, "Problem") {
 		t.Fatalf("expected problem section, got %q", rendered)
 	}

@@ -63,6 +63,34 @@ type StackView struct {
 	Status      StackStatus
 }
 
+type StartReadiness string
+
+const (
+	StartReadinessReady   StartReadiness = "ready"
+	StartReadinessActive  StartReadiness = "active"
+	StartReadinessBlocked StartReadiness = "blocked"
+)
+
+type ProfileStartAnalysis struct {
+	Name     string
+	Status   StartReadiness
+	Problems []string
+}
+
+type StackMemberStartAnalysis struct {
+	ProfileName string
+	Status      StartReadiness
+	Problems    []string
+}
+
+type StackStartAnalysis struct {
+	Name         string
+	Members      []StackMemberStartAnalysis
+	ReadyCount   int
+	ActiveCount  int
+	BlockedCount int
+}
+
 type RemoveProfileResult struct {
 	Name              string
 	WasActive         bool
@@ -246,6 +274,110 @@ func (s *Service) ToggleStack(name string) error {
 	}
 
 	return s.StartStack(name)
+}
+
+func (s *Service) AnalyzeProfileStart(name string) (ProfileStartAnalysis, error) {
+	profile, err := s.profile(name)
+	if err != nil {
+		return ProfileStartAnalysis{}, err
+	}
+
+	analysis := ProfileStartAnalysis{Name: profile.Name}
+	if state, exists := s.supervisor.Snapshot(profile.Name); exists && isActiveStatus(state.Status) {
+		analysis.Status = StartReadinessActive
+		return analysis, nil
+	}
+
+	if err := validateProfileStart(profile); err != nil {
+		analysis.Problems = append(analysis.Problems, err.Error())
+	}
+
+	if owner, exists := s.activePortOwner(profile.Name, profile.LocalPort); exists {
+		analysis.Problems = append(
+			analysis.Problems,
+			fmt.Sprintf("local port %d is already used by active profile %q", profile.LocalPort, owner),
+		)
+	}
+
+	if len(analysis.Problems) > 0 {
+		analysis.Status = StartReadinessBlocked
+		return analysis, nil
+	}
+
+	analysis.Status = StartReadinessReady
+	return analysis, nil
+}
+
+func (s *Service) AnalyzeStackStart(name string) (StackStartAnalysis, error) {
+	stack, err := s.stack(name)
+	if err != nil {
+		return StackStartAnalysis{}, err
+	}
+
+	activeStates := s.activeStatesByName()
+	reservedPorts := make(map[int]string, len(activeStates))
+	for profileName, state := range activeStates {
+		if !isActiveStatus(state.Status) {
+			continue
+		}
+
+		profile, exists := s.profiles[profileName]
+		if !exists {
+			continue
+		}
+
+		reservedPorts[profile.LocalPort] = profileName
+	}
+
+	analysis := StackStartAnalysis{
+		Name:    stack.Name,
+		Members: make([]StackMemberStartAnalysis, 0, len(stack.Profiles)),
+	}
+
+	for _, profileName := range stack.Profiles {
+		member := StackMemberStartAnalysis{ProfileName: profileName}
+
+		profile, err := s.profile(profileName)
+		if err != nil {
+			member.Status = StartReadinessBlocked
+			member.Problems = append(member.Problems, err.Error())
+			analysis.BlockedCount++
+			analysis.Members = append(analysis.Members, member)
+			continue
+		}
+
+		if state, exists := activeStates[profile.Name]; exists && isActiveStatus(state.Status) {
+			member.Status = StartReadinessActive
+			analysis.ActiveCount++
+			analysis.Members = append(analysis.Members, member)
+			continue
+		}
+
+		if err := validateProfileStart(profile); err != nil {
+			member.Problems = append(member.Problems, err.Error())
+		}
+
+		if owner, exists := reservedPorts[profile.LocalPort]; exists && owner != profile.Name {
+			member.Problems = append(
+				member.Problems,
+				fmt.Sprintf("local port %d is already reserved by profile %q", profile.LocalPort, owner),
+			)
+		}
+
+		if len(member.Problems) > 0 {
+			member.Status = StartReadinessBlocked
+			analysis.BlockedCount++
+			analysis.Members = append(analysis.Members, member)
+			continue
+		}
+
+		member.Status = StartReadinessReady
+		analysis.ReadyCount++
+		reservedPorts[profile.LocalPort] = profile.Name
+		analysis.Members = append(analysis.Members, member)
+	}
+
+	return analysis, nil
 }
 
 func (s *Service) RemoveProfile(name string, removeFromStacks bool, persist ConfigPersister) (RemoveProfileResult, error) {
@@ -480,6 +612,11 @@ func defaultRuntimeState(profileName string) domain.RuntimeState {
 		ProfileName: profileName,
 		Status:      domain.TunnelStatusStopped,
 	}
+}
+
+func validateProfileStart(profile domain.Profile) error {
+	_, err := BuildProcessSpec(profile)
+	return err
 }
 
 func stackStatus(activeCount, total int) StackStatus {
