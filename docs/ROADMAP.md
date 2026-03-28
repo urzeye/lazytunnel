@@ -29,6 +29,7 @@ The first usable version should focus on a small but high-value slice:
 ### v0.1.x
 
 - Homebrew support
+- `aqua` / registry integration
 - log formatting, styling, and filtering polish in the TUI
 - imports from `~/.ssh/config` and Kubernetes contexts
 - an explicit manual restart action in the TUI if it still feels necessary

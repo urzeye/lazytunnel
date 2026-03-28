@@ -29,6 +29,7 @@
 ### v0.1.x
 
 - Homebrew 支持
+- `aqua` / registry 接入
 - 打磨 TUI 日志面板的格式、样式和过滤
 - 增加从 `~/.ssh/config` 和 Kubernetes context 的导入
 - 如果体验上仍然有明显缺口，再补显式手动 restart 动作
