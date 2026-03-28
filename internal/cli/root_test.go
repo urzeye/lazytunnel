@@ -668,6 +668,144 @@ Host jump-dev
 	}
 }
 
+func TestProfileImportKubeContextsCreatesDraftProfiles(t *testing.T) {
+	t.Parallel()
+
+	configPath := filepath.Join(t.TempDir(), "config.yaml")
+	if err := storage.SaveConfig(configPath, domain.DefaultConfig()); err != nil {
+		t.Fatalf("save config: %v", err)
+	}
+
+	kubeconfigPath := filepath.Join(t.TempDir(), "config")
+	kubeconfig := `
+apiVersion: v1
+kind: Config
+current-context: dev-cluster
+contexts:
+  - name: dev-cluster
+    context:
+      cluster: dev
+      user: dev-user
+      namespace: backend
+  - name: prod-cluster
+    context:
+      cluster: prod
+      user: prod-user
+`
+	if err := os.WriteFile(kubeconfigPath, []byte(strings.TrimSpace(kubeconfig)+"\n"), 0o644); err != nil {
+		t.Fatalf("write kubeconfig: %v", err)
+	}
+
+	output := executeCommand(t,
+		"--config", configPath,
+		"profile", "import", "kube-contexts",
+		"--kubeconfig", kubeconfigPath,
+	)
+
+	if !strings.Contains(output, "2 created") {
+		t.Fatalf("unexpected output: %q", output)
+	}
+	for _, name := range []string{"dev-cluster", "prod-cluster"} {
+		if !strings.Contains(output, name) {
+			t.Fatalf("expected imported context %q in output, got %q", name, output)
+		}
+	}
+
+	cfg, err := storage.LoadConfig(configPath)
+	if err != nil {
+		t.Fatalf("load config: %v", err)
+	}
+
+	imported, exists := findProfile(cfg.Profiles, "dev-cluster")
+	if !exists {
+		t.Fatal("expected imported dev-cluster profile")
+	}
+	if imported.Type != domain.TunnelTypeKubernetesPortForward {
+		t.Fatalf("expected kubernetes type, got %q", imported.Type)
+	}
+	if imported.Kubernetes == nil {
+		t.Fatal("expected kubernetes config to be present")
+	}
+	if imported.Kubernetes.Context != "dev-cluster" {
+		t.Fatalf("unexpected imported context: %#v", imported.Kubernetes)
+	}
+	if imported.Kubernetes.Namespace != "backend" {
+		t.Fatalf("expected imported namespace backend, got %q", imported.Kubernetes.Namespace)
+	}
+	if imported.Kubernetes.ResourceType != "service" || imported.Kubernetes.Resource != "change-me" || imported.Kubernetes.RemotePort != 80 {
+		t.Fatalf("expected placeholder resource target, got %#v", imported.Kubernetes)
+	}
+	if !strings.Contains(imported.Description, "Cluster dev.") {
+		t.Fatalf("expected cluster details in description, got %q", imported.Description)
+	}
+	if !strings.Contains(imported.Description, "Namespace backend.") {
+		t.Fatalf("expected namespace details in description, got %q", imported.Description)
+	}
+	if got := strings.Join(imported.Labels, ","); got != "draft,imported,kube-context,current-context" {
+		t.Fatalf("unexpected labels: %q", got)
+	}
+}
+
+func TestProfileImportKubeContextsSkipsExistingWithoutOverwrite(t *testing.T) {
+	t.Parallel()
+
+	configPath := filepath.Join(t.TempDir(), "config.yaml")
+	cfg := domain.DefaultConfig()
+	cfg.Profiles = []domain.Profile{
+		{
+			Name:      "dev-cluster",
+			Type:      domain.TunnelTypeKubernetesPortForward,
+			LocalPort: 18080,
+			Kubernetes: &domain.Kubernetes{
+				Context:      "dev-cluster",
+				Namespace:    "custom",
+				ResourceType: "service",
+				Resource:     "api",
+				RemotePort:   8080,
+			},
+		},
+	}
+	if err := storage.SaveConfig(configPath, cfg); err != nil {
+		t.Fatalf("save config: %v", err)
+	}
+
+	kubeconfigPath := filepath.Join(t.TempDir(), "config")
+	kubeconfig := `
+apiVersion: v1
+kind: Config
+contexts:
+  - name: dev-cluster
+    context:
+      cluster: dev
+`
+	if err := os.WriteFile(kubeconfigPath, []byte(strings.TrimSpace(kubeconfig)+"\n"), 0o644); err != nil {
+		t.Fatalf("write kubeconfig: %v", err)
+	}
+
+	output := executeCommand(t,
+		"--config", configPath,
+		"profile", "import", "kube-contexts",
+		"--kubeconfig", kubeconfigPath,
+	)
+
+	if !strings.Contains(output, "0 created, 0 updated, 1 skipped") {
+		t.Fatalf("unexpected output: %q", output)
+	}
+
+	persisted, err := storage.LoadConfig(configPath)
+	if err != nil {
+		t.Fatalf("load config: %v", err)
+	}
+
+	existing, exists := findProfile(persisted.Profiles, "dev-cluster")
+	if !exists {
+		t.Fatal("expected existing profile to remain")
+	}
+	if existing.Kubernetes == nil || existing.Kubernetes.Namespace != "custom" || existing.Kubernetes.Resource != "api" || existing.Kubernetes.RemotePort != 8080 {
+		t.Fatalf("expected existing kube profile to remain unchanged, got %#v", existing.Kubernetes)
+	}
+}
+
 func executeCommand(t *testing.T, args ...string) string {
 	t.Helper()
 

@@ -10,6 +10,7 @@ import (
 	"strings"
 
 	"github.com/spf13/cobra"
+	"gopkg.in/yaml.v3"
 
 	"github.com/urzeye/lazytunnel/internal/domain"
 	"github.com/urzeye/lazytunnel/internal/storage"
@@ -23,6 +24,22 @@ type sshConfigImportEntry struct {
 	Source   string
 }
 
+type kubeconfigImportFile struct {
+	CurrentContext string                    `yaml:"current-context"`
+	Contexts       []kubeconfigImportContext `yaml:"contexts"`
+}
+
+type kubeconfigImportContext struct {
+	Name    string                      `yaml:"name"`
+	Context kubeconfigImportContextSpec `yaml:"context"`
+}
+
+type kubeconfigImportContextSpec struct {
+	Cluster   string `yaml:"cluster"`
+	User      string `yaml:"user"`
+	Namespace string `yaml:"namespace"`
+}
+
 func newProfileImportCommand(configPath *string) *cobra.Command {
 	cmd := &cobra.Command{
 		Use:   "import",
@@ -31,6 +48,7 @@ func newProfileImportCommand(configPath *string) *cobra.Command {
 
 	cmd.AddCommand(
 		newProfileImportSSHConfigCommand(configPath),
+		newProfileImportKubeContextsCommand(configPath),
 	)
 
 	return cmd
@@ -120,6 +138,90 @@ func newProfileImportSSHConfigCommand(configPath *string) *cobra.Command {
 	return cmd
 }
 
+func newProfileImportKubeContextsCommand(configPath *string) *cobra.Command {
+	var (
+		kubeconfigPath string
+		overwrite      bool
+	)
+
+	cmd := &cobra.Command{
+		Use:   "kube-contexts",
+		Short: "Import kubeconfig contexts as draft profiles",
+		RunE: func(cmd *cobra.Command, args []string) error {
+			if strings.TrimSpace(kubeconfigPath) == "" {
+				kubeconfigPath = defaultKubeconfigPath()
+			}
+
+			kubeconfig, err := loadKubeconfigImportFile(kubeconfigPath)
+			if err != nil {
+				return err
+			}
+			if len(kubeconfig.Contexts) == 0 {
+				return fmt.Errorf("no Kubernetes contexts found in %q", kubeconfigPath)
+			}
+
+			cfg, err := storage.LoadConfig(*configPath)
+			if err != nil {
+				return fmt.Errorf("load config: %w", err)
+			}
+
+			usedPorts := usedLocalPorts(cfg)
+			created := 0
+			updated := 0
+			skipped := 0
+			importedNames := make([]string, 0, len(kubeconfig.Contexts))
+
+			for _, context := range kubeconfig.Contexts {
+				if _, exists := findProfile(cfg.Profiles, context.Name); exists && !overwrite {
+					skipped++
+					continue
+				}
+
+				profile := importedKubernetesProfile(kubeconfigPath, kubeconfig.CurrentContext, context, usedPorts)
+				if cfg.SetProfile(profile) {
+					created++
+				} else {
+					updated++
+				}
+				importedNames = append(importedNames, profile.Name)
+			}
+
+			if created == 0 && updated == 0 {
+				_, _ = fmt.Fprintf(
+					cmd.OutOrStdout(),
+					"imported kube contexts from %s: 0 created, 0 updated, %d skipped\n",
+					kubeconfigPath,
+					skipped,
+				)
+				return nil
+			}
+
+			if err := storage.SaveConfig(*configPath, cfg); err != nil {
+				return fmt.Errorf("save config: %w", err)
+			}
+
+			_, _ = fmt.Fprintf(
+				cmd.OutOrStdout(),
+				"imported kube contexts from %s: %d created, %d updated, %d skipped\n",
+				kubeconfigPath,
+				created,
+				updated,
+				skipped,
+			)
+			if len(importedNames) > 0 {
+				_, _ = fmt.Fprintf(cmd.OutOrStdout(), "profiles: %s\n", strings.Join(importedNames, ", "))
+			}
+
+			return nil
+		},
+	}
+
+	cmd.Flags().StringVar(&kubeconfigPath, "kubeconfig", "", "path to the kubeconfig file to import")
+	cmd.Flags().BoolVar(&overwrite, "overwrite", false, "overwrite existing profiles when imported names collide")
+
+	return cmd
+}
+
 func defaultSSHConfigPath() string {
 	homeDir, err := os.UserHomeDir()
 	if err != nil {
@@ -127,6 +229,26 @@ func defaultSSHConfigPath() string {
 	}
 
 	return filepath.Join(homeDir, ".ssh", "config")
+}
+
+func defaultKubeconfigPath() string {
+	kubeconfig := strings.TrimSpace(os.Getenv("KUBECONFIG"))
+	if kubeconfig != "" {
+		parts := filepath.SplitList(kubeconfig)
+		for _, part := range parts {
+			if strings.TrimSpace(part) == "" {
+				continue
+			}
+			return part
+		}
+	}
+
+	homeDir, err := os.UserHomeDir()
+	if err != nil {
+		return "~/.kube/config"
+	}
+
+	return filepath.Join(homeDir, ".kube", "config")
 }
 
 func loadSSHConfigImportEntries(path string) ([]sshConfigImportEntry, error) {
@@ -149,6 +271,25 @@ func loadSSHConfigImportEntries(path string) ([]sshConfigImportEntry, error) {
 	}
 
 	return entries, nil
+}
+
+func loadKubeconfigImportFile(path string) (kubeconfigImportFile, error) {
+	resolvedPath, err := expandUserPath(path)
+	if err != nil {
+		return kubeconfigImportFile{}, fmt.Errorf("resolve kubeconfig path %q: %w", path, err)
+	}
+
+	content, err := os.ReadFile(resolvedPath)
+	if err != nil {
+		return kubeconfigImportFile{}, fmt.Errorf("read kubeconfig %q: %w", resolvedPath, err)
+	}
+
+	var kubeconfig kubeconfigImportFile
+	if err := yaml.Unmarshal(content, &kubeconfig); err != nil {
+		return kubeconfigImportFile{}, fmt.Errorf("decode kubeconfig %q: %w", resolvedPath, err)
+	}
+
+	return kubeconfig, nil
 }
 
 func collectSSHConfigImportEntries(path string, visited map[string]struct{}, entriesByAlias map[string]sshConfigImportEntry, order *[]string) error {
@@ -333,6 +474,50 @@ func importedSSHProfile(entry sshConfigImportEntry, usedPorts map[int]struct{}) 
 			Host:       entry.Alias,
 			RemoteHost: "127.0.0.1",
 			RemotePort: 80,
+		},
+	}
+}
+
+func importedKubernetesProfile(sourcePath, currentContext string, context kubeconfigImportContext, usedPorts map[int]struct{}) domain.Profile {
+	localPort := nextAvailableImportedPort(usedPorts, 18080)
+	labels := []string{"draft", "imported", "kube-context"}
+	if context.Name == currentContext && currentContext != "" {
+		labels = append(labels, "current-context")
+	}
+
+	details := []string{
+		fmt.Sprintf("Imported from %s.", sourcePath),
+		fmt.Sprintf("Kubernetes context %s.", context.Name),
+	}
+	if context.Context.Cluster != "" {
+		details = append(details, fmt.Sprintf("Cluster %s.", context.Context.Cluster))
+	}
+	if context.Context.User != "" {
+		details = append(details, fmt.Sprintf("User %s.", context.Context.User))
+	}
+	if context.Context.Namespace != "" {
+		details = append(details, fmt.Sprintf("Namespace %s.", context.Context.Namespace))
+	}
+	details = append(details, "Update the resource target before using this draft.")
+
+	return domain.Profile{
+		Name:        context.Name,
+		Description: strings.Join(details, " "),
+		Type:        domain.TunnelTypeKubernetesPortForward,
+		LocalPort:   localPort,
+		Labels:      labels,
+		Restart: domain.RestartPolicy{
+			Enabled:        true,
+			MaxRetries:     0,
+			InitialBackoff: "2s",
+			MaxBackoff:     "30s",
+		},
+		Kubernetes: &domain.Kubernetes{
+			Context:      context.Name,
+			Namespace:    context.Context.Namespace,
+			ResourceType: "service",
+			Resource:     "change-me",
+			RemotePort:   80,
 		},
 	}
 }
