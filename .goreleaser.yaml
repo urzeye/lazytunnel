@@ -24,6 +24,7 @@ builds:
       - -X github.com/urzeye/lazytunnel/internal/buildinfo.Version={{ .Version }}
       - -X github.com/urzeye/lazytunnel/internal/buildinfo.Commit={{ .Commit }}
       - -X github.com/urzeye/lazytunnel/internal/buildinfo.Date={{ .Date }}
+      - -X github.com/urzeye/lazytunnel/internal/buildinfo.Dirty=false
 
 archives:
   - id: packages

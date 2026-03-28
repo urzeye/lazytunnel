@@ -16,7 +16,7 @@ func newVersionCommand() *cobra.Command {
 		Short: "Print build version information",
 		RunE: func(cmd *cobra.Command, args []string) error {
 			if short {
-				_, err := fmt.Fprintln(cmd.OutOrStdout(), buildinfo.Version)
+				_, err := fmt.Fprintln(cmd.OutOrStdout(), buildinfo.ShortVersion())
 				return err
 			}
 

@@ -20,11 +20,23 @@ build:
   #!/usr/bin/env bash
   set -euo pipefail
   mkdir -p bin
-  version="${VERSION:-$(git describe --tags --always --dirty 2>/dev/null || echo dev)}"
+  version="${VERSION:-}"
+  if [ -z "$version" ]; then
+    version="$(git describe --tags --exact-match 2>/dev/null || echo dev)"
+  fi
   commit="${COMMIT:-$(git rev-parse --short HEAD 2>/dev/null || echo none)}"
   date="${DATE:-$(date -u +"%Y-%m-%dT%H:%M:%SZ")}"
+  dirty="${DIRTY:-}"
+  if [ -z "$dirty" ]; then
+    dirty="false"
+    if git rev-parse --is-inside-work-tree >/dev/null 2>&1; then
+      if [ -n "$(git status --porcelain --untracked-files=normal 2>/dev/null)" ]; then
+        dirty="true"
+      fi
+    fi
+  fi
   go build -trimpath \
-    -ldflags "-s -w -X github.com/urzeye/lazytunnel/internal/buildinfo.Version=$version -X github.com/urzeye/lazytunnel/internal/buildinfo.Commit=$commit -X github.com/urzeye/lazytunnel/internal/buildinfo.Date=$date" \
+    -ldflags "-s -w -X github.com/urzeye/lazytunnel/internal/buildinfo.Version=$version -X github.com/urzeye/lazytunnel/internal/buildinfo.Commit=$commit -X github.com/urzeye/lazytunnel/internal/buildinfo.Date=$date -X github.com/urzeye/lazytunnel/internal/buildinfo.Dirty=$dirty" \
     -o bin/lazytunnel ./cmd/lazytunnel
 
 check:
