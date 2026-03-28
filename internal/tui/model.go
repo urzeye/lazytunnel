@@ -43,13 +43,23 @@ var (
 				Border(lipgloss.NormalBorder()).
 				BorderForeground(lipgloss.Color("240")).
 				Padding(0, 1)
-	listRowStyle         = lipgloss.NewStyle()
+	listRowStyle = lipgloss.NewStyle().
+			Padding(0, 1)
 	selectedListRowStyle = lipgloss.NewStyle().
+				Bold(true).
 				Foreground(lipgloss.Color("230")).
-				Background(lipgloss.Color("24"))
+				Background(lipgloss.Color("24")).
+				Padding(0, 1)
 	selectedOutlineRowStyle = lipgloss.NewStyle().
 				Foreground(lipgloss.Color("230")).
-				Background(lipgloss.Color("238"))
+				Background(lipgloss.Color("238")).
+				Padding(0, 1)
+	selectedMarkerStyle = lipgloss.NewStyle().
+				Bold(true).
+				Foreground(lipgloss.Color("86"))
+	selectedOutlineMarkerStyle = lipgloss.NewStyle().
+					Bold(true).
+					Foreground(lipgloss.Color("110"))
 	mutedStyle = lipgloss.NewStyle().
 			Foreground(lipgloss.Color("244"))
 	selectedMutedStyle = lipgloss.NewStyle().
@@ -443,11 +453,11 @@ func (m Model) hintMessage() string {
 	case profileCount == 0:
 		return "a draft profile  e edit config  r reload  / filter  q quit"
 	case stackCount == 0:
-		return "c clone profile  A draft stack  a draft profile  e edit config  r reload  / filter  q quit"
+		return "j/k move  h/l inspector  c clone profile  A draft stack  e edit config  / filter  q quit"
 	case m.focus == focusStacks:
-		return "Tab switch  Enter toggle stack  c clone stack  A draft stack  d delete  e edit config  / filter  q quit"
+		return "j/k move  Tab lists  h/l inspector  Enter toggle stack  c clone stack  A draft stack  d delete  / filter  q quit"
 	default:
-		return "Tab switch  Enter toggle  c clone profile  A draft stack  d delete  e edit config  / filter  q quit"
+		return "j/k move  Tab lists  h/l inspector  Enter toggle  c clone profile  A draft stack  d delete  / filter  q quit"
 	}
 }
 
@@ -557,24 +567,26 @@ func (m Model) renderStacksPanel(views []app.StackView, width, height int) strin
 
 func (m Model) renderProfileRow(view app.ProfileView, selected bool, focused bool, width int) string {
 	style := listRowStyleFor(selected, focused)
-	contentWidth := max(1, width-style.GetHorizontalFrameSize())
+	marker := selectionMarker(selected, focused)
+	contentWidth := max(1, width-style.GetHorizontalFrameSize()-lipgloss.Width(marker))
 	line := composeStyledLine(
 		renderStatusBadge(view.State.Status)+" ",
 		fmt.Sprintf("%s  :%d  %s", view.Profile.Name, view.Profile.LocalPort, profileTarget(view.Profile)),
 		contentWidth,
 	)
-	return renderSizedBlock(style, width, line)
+	return renderSizedBlock(style, width, marker+line)
 }
 
 func (m Model) renderStackRow(view app.StackView, selected bool, focused bool, width int) string {
 	style := listRowStyleFor(selected, focused)
-	contentWidth := max(1, width-style.GetHorizontalFrameSize())
+	marker := selectionMarker(selected, focused)
+	contentWidth := max(1, width-style.GetHorizontalFrameSize()-lipgloss.Width(marker))
 	line := composeStyledLine(
 		renderStackStatusBadge(view.Status)+" ",
 		fmt.Sprintf("%s  %d/%d  %s", view.Stack.Name, view.ActiveCount, len(view.Members), stackMembersSummary(view)),
 		contentWidth,
 	)
-	return renderSizedBlock(style, width, line)
+	return renderSizedBlock(style, width, marker+line)
 }
 
 func (m Model) renderInspectorPanel(profiles []app.ProfileView, stacks []app.StackView, width, height int) string {
@@ -600,8 +612,8 @@ func (m Model) inspectorTitle(profiles []app.ProfileView, stacks []app.StackView
 
 func (m Model) renderInspectorTabs(width int) string {
 	tabs := []string{
-		renderInspectorTab("Details", m.inspectorTab == inspectorTabDetails),
-		renderInspectorTab("Logs", m.inspectorTab == inspectorTabLogs),
+		renderInspectorTab("h", "Details", m.inspectorTab == inspectorTabDetails),
+		renderInspectorTab("l", "Logs", m.inspectorTab == inspectorTabLogs),
 	}
 	line := strings.Join(tabs, " ")
 	return lipgloss.NewStyle().Width(max(1, width)).Render(line)
@@ -1894,7 +1906,18 @@ func nextAvailableLocalPort(cfg domain.Config, start int) int {
 	}
 }
 
-func renderInspectorTab(label string, active bool) string {
+func selectionMarker(selected, focused bool) string {
+	switch {
+	case selected && focused:
+		return selectedMarkerStyle.Render("> ")
+	case selected:
+		return selectedOutlineMarkerStyle.Render("| ")
+	default:
+		return "  "
+	}
+}
+
+func renderInspectorTab(key, label string, active bool) string {
 	style := lipgloss.NewStyle().
 		Foreground(lipgloss.Color("252")).
 		Background(lipgloss.Color("238")).
@@ -1904,7 +1927,7 @@ func renderInspectorTab(label string, active bool) string {
 			Foreground(lipgloss.Color("230")).
 			Background(lipgloss.Color("24"))
 	}
-	return style.Render(label)
+	return style.Render(key + " " + label)
 }
 
 func renderCompactKeyValue(label, value string, width int) string {

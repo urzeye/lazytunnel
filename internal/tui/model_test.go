@@ -185,6 +185,55 @@ func TestRecentStackActivitySortsAndLimits(t *testing.T) {
 	}
 }
 
+func TestRenderProfileRowMarksSelection(t *testing.T) {
+	t.Parallel()
+
+	model := Model{}
+	view := app.ProfileView{
+		Profile: domain.Profile{
+			Name:      "api-debug",
+			Type:      domain.TunnelTypeKubernetesPortForward,
+			LocalPort: 8080,
+			Kubernetes: &domain.Kubernetes{
+				Context:      "dev-cluster",
+				Namespace:    "backend",
+				ResourceType: "service",
+				Resource:     "api",
+				RemotePort:   80,
+			},
+		},
+	}
+
+	focused := model.renderProfileRow(view, true, true, 80)
+	if !strings.Contains(focused, "> ") {
+		t.Fatalf("expected focused selected marker, got %q", focused)
+	}
+
+	outlined := model.renderProfileRow(view, true, false, 80)
+	if !strings.Contains(outlined, "| ") {
+		t.Fatalf("expected unfocused selected marker, got %q", outlined)
+	}
+
+	plain := model.renderProfileRow(view, false, false, 80)
+	if strings.Contains(plain, "> ") || strings.Contains(plain, "| ") {
+		t.Fatalf("expected unselected row to omit selection marker, got %q", plain)
+	}
+}
+
+func TestRenderInspectorTabsShowsKeyHints(t *testing.T) {
+	t.Parallel()
+
+	model := Model{inspectorTab: inspectorTabLogs}
+	got := model.renderInspectorTabs(40)
+
+	if !strings.Contains(got, "h Details") {
+		t.Fatalf("expected details tab hint, got %q", got)
+	}
+	if !strings.Contains(got, "l Logs") {
+		t.Fatalf("expected logs tab hint, got %q", got)
+	}
+}
+
 func TestFormatLastExit(t *testing.T) {
 	t.Parallel()
 
@@ -699,6 +748,21 @@ func TestReloadConfigFromDiskReplacesServiceConfig(t *testing.T) {
 	}
 	if got := len(model.service.StackViews()); got != 1 {
 		t.Fatalf("expected 1 reloaded stack, got %d", got)
+	}
+}
+
+func TestHintMessageMentionsInspectorTabs(t *testing.T) {
+	t.Parallel()
+
+	service, err := app.NewService(storage.SampleConfig(), newStubRuntimeController())
+	if err != nil {
+		t.Fatalf("new service: %v", err)
+	}
+
+	model := Model{service: service}
+	got := model.hintMessage()
+	if !strings.Contains(got, "h/l inspector") {
+		t.Fatalf("expected inspector tab hint, got %q", got)
 	}
 }
 
