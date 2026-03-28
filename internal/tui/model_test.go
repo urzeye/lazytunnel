@@ -1,11 +1,15 @@
 package tui
 
 import (
+	"path/filepath"
+	"strings"
 	"testing"
 	"time"
 
 	"github.com/urzeye/lazytunnel/internal/app"
 	"github.com/urzeye/lazytunnel/internal/domain"
+	ltruntime "github.com/urzeye/lazytunnel/internal/runtime"
+	"github.com/urzeye/lazytunnel/internal/storage"
 )
 
 func TestProfileTarget(t *testing.T) {
@@ -198,5 +202,138 @@ func TestTrimLastWord(t *testing.T) {
 
 	if got := trimLastWord("single"); got != "" {
 		t.Fatalf("trimLastWord() = %q, want empty string", got)
+	}
+}
+
+func TestBuildDeleteRequestIncludesStackImpact(t *testing.T) {
+	t.Parallel()
+
+	service, err := app.NewService(storage.SampleConfig(), newStubRuntimeController())
+	if err != nil {
+		t.Fatalf("new service: %v", err)
+	}
+
+	model := Model{service: service}
+	profiles := filterProfileViews(service.ProfileViews(), "")
+	stacks := filterStackViews(service.StackViews(), "")
+
+	request := model.buildDeleteRequest(profiles, stacks)
+	if request == nil {
+		t.Fatal("expected delete request")
+	}
+
+	if !strings.Contains(request.Message, "stack references will be pruned") {
+		t.Fatalf("expected stack pruning message, got %q", request.Message)
+	}
+}
+
+func TestConfirmDeletePersistsProfileRemoval(t *testing.T) {
+	t.Parallel()
+
+	configPath := filepath.Join(t.TempDir(), "config.yaml")
+	if err := storage.SaveConfig(configPath, storage.SampleConfig()); err != nil {
+		t.Fatalf("save config: %v", err)
+	}
+
+	runtime := newStubRuntimeController()
+	runtime.states["prod-db"] = domain.RuntimeState{
+		ProfileName: "prod-db",
+		Status:      domain.TunnelStatusRunning,
+	}
+
+	service, err := app.NewService(storage.SampleConfig(), runtime)
+	if err != nil {
+		t.Fatalf("new service: %v", err)
+	}
+
+	model := Model{
+		service:       service,
+		configPath:    configPath,
+		pendingDelete: &deleteRequest{Kind: deleteKindProfile, Name: "prod-db"},
+	}
+
+	model = model.confirmDelete()
+
+	if !strings.Contains(model.lastNotice, "Removed profile prod-db.") {
+		t.Fatalf("expected success notice, got %q", model.lastNotice)
+	}
+	if len(runtime.stoppedNames) != 1 || runtime.stoppedNames[0] != "prod-db" {
+		t.Fatalf("expected prod-db to be stopped before delete, got %#v", runtime.stoppedNames)
+	}
+
+	cfg, err := storage.LoadConfig(configPath)
+	if err != nil {
+		t.Fatalf("load config: %v", err)
+	}
+
+	if got := len(cfg.Profiles); got != 1 {
+		t.Fatalf("expected 1 profile after delete, got %d", got)
+	}
+	if got := cfg.Profiles[0].Name; got != "api-debug" {
+		t.Fatalf("expected api-debug to remain, got %q", got)
+	}
+	if got := len(cfg.Stacks); got != 1 {
+		t.Fatalf("expected 1 stack after prune, got %d", got)
+	}
+	if got := strings.Join(cfg.Stacks[0].Profiles, ","); got != "api-debug" {
+		t.Fatalf("expected stack to be pruned to api-debug, got %q", got)
+	}
+}
+
+type stubRuntimeController struct {
+	states        map[string]domain.RuntimeState
+	stoppedNames  []string
+	subscriptions map[int]chan ltruntime.Event
+}
+
+func newStubRuntimeController() *stubRuntimeController {
+	return &stubRuntimeController{
+		states:        make(map[string]domain.RuntimeState),
+		subscriptions: make(map[int]chan ltruntime.Event),
+	}
+}
+
+func (s *stubRuntimeController) Start(spec ltruntime.ProcessSpec) error {
+	s.states[spec.Name] = domain.RuntimeState{
+		ProfileName: spec.Name,
+		Status:      domain.TunnelStatusRunning,
+		PID:         1,
+	}
+	return nil
+}
+
+func (s *stubRuntimeController) Stop(name string) error {
+	s.stoppedNames = append(s.stoppedNames, name)
+	s.states[name] = domain.RuntimeState{
+		ProfileName: name,
+		Status:      domain.TunnelStatusStopped,
+	}
+	return nil
+}
+
+func (s *stubRuntimeController) Snapshot(name string) (domain.RuntimeState, bool) {
+	state, ok := s.states[name]
+	return state, ok
+}
+
+func (s *stubRuntimeController) ListStates() []domain.RuntimeState {
+	states := make([]domain.RuntimeState, 0, len(s.states))
+	for _, state := range s.states {
+		states = append(states, state)
+	}
+	return states
+}
+
+func (s *stubRuntimeController) Subscribe(buffer int) (int, <-chan ltruntime.Event) {
+	id := len(s.subscriptions) + 1
+	ch := make(chan ltruntime.Event, buffer)
+	s.subscriptions[id] = ch
+	return id, ch
+}
+
+func (s *stubRuntimeController) Unsubscribe(id int) {
+	if ch, ok := s.subscriptions[id]; ok {
+		delete(s.subscriptions, id)
+		close(ch)
 	}
 }

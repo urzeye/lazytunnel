@@ -212,6 +212,92 @@ func TestServiceToggleStackStopsWhenFullyRunning(t *testing.T) {
 	}
 }
 
+func TestServiceRemoveProfilePrunesStackReferencesAndStopsActiveTunnel(t *testing.T) {
+	t.Parallel()
+
+	runtime := newFakeRuntimeController()
+	runtime.statesByName["prod-db"] = domain.RuntimeState{
+		ProfileName: "prod-db",
+		Status:      domain.TunnelStatusRunning,
+	}
+
+	service, err := NewService(testConfig(), runtime, WithPortChecker(fakePortChecker{}))
+	if err != nil {
+		t.Fatalf("new service: %v", err)
+	}
+
+	var persisted domain.Config
+	result, err := service.RemoveProfile("prod-db", true, func(cfg domain.Config) error {
+		persisted = cfg
+		return nil
+	})
+	if err != nil {
+		t.Fatalf("remove profile: %v", err)
+	}
+
+	if !result.WasActive {
+		t.Fatal("expected active profile removal to report WasActive")
+	}
+	if result.UpdatedStacks != 1 {
+		t.Fatalf("expected 1 updated stack, got %d", result.UpdatedStacks)
+	}
+	if result.RemovedStacks != 0 {
+		t.Fatalf("expected 0 removed stacks, got %d", result.RemovedStacks)
+	}
+	if len(runtime.stoppedNames) != 1 || runtime.stoppedNames[0] != "prod-db" {
+		t.Fatalf("expected stop call for prod-db, got %#v", runtime.stoppedNames)
+	}
+
+	if got := len(service.Profiles()); got != 2 {
+		t.Fatalf("expected 2 remaining profiles, got %d", got)
+	}
+	if got := len(service.Stacks()); got != 1 {
+		t.Fatalf("expected 1 remaining stack, got %d", got)
+	}
+	if want := []string{"api-debug"}; strings.Join(service.Stacks()[0].Profiles, ",") != strings.Join(want, ",") {
+		t.Fatalf("expected remaining stack members %v, got %v", want, service.Stacks()[0].Profiles)
+	}
+	if got := len(persisted.Profiles); got != 2 {
+		t.Fatalf("expected persisted config to have 2 profiles, got %d", got)
+	}
+}
+
+func TestServiceRemoveProfileRejectsReferencedProfileWithoutPrune(t *testing.T) {
+	t.Parallel()
+
+	service, err := NewService(testConfig(), newFakeRuntimeController(), WithPortChecker(fakePortChecker{}))
+	if err != nil {
+		t.Fatalf("new service: %v", err)
+	}
+
+	_, err = service.RemoveProfile("prod-db", false, nil)
+	if err == nil {
+		t.Fatal("expected remove profile to fail")
+	}
+
+	if !strings.Contains(err.Error(), "still referenced by stacks") {
+		t.Fatalf("unexpected error: %v", err)
+	}
+}
+
+func TestServiceRemoveStackUpdatesInMemoryConfig(t *testing.T) {
+	t.Parallel()
+
+	service, err := NewService(testConfig(), newFakeRuntimeController(), WithPortChecker(fakePortChecker{}))
+	if err != nil {
+		t.Fatalf("new service: %v", err)
+	}
+
+	_, err = service.RemoveStack("backend-dev", nil)
+	if err != nil {
+		t.Fatalf("remove stack: %v", err)
+	}
+
+	if got := len(service.Stacks()); got != 0 {
+		t.Fatalf("expected no stacks, got %d", got)
+	}
+}
+
 func testConfig() domain.Config {
 	return domain.Config{
 		Version: 1,

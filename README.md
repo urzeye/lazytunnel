@@ -114,6 +114,7 @@ LazyTunnel is designed around a few strong workflows:
 - filter profiles and stacks by name, label, target, and port
 - detect local port conflicts before startup
 - manage config from the CLI with add and remove commands
+- delete profiles and stacks directly from the TUI with confirmation
 
 ## Supported Workflows
 

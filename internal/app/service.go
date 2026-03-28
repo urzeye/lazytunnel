@@ -4,6 +4,7 @@ import (
 	"errors"
 	"fmt"
 	"net"
+	"strings"
 
 	"github.com/urzeye/lazytunnel/internal/domain"
 	ltruntime "github.com/urzeye/lazytunnel/internal/runtime"
@@ -21,6 +22,8 @@ type RuntimeController interface {
 type PortChecker interface {
 	CheckLocalPort(port int) error
 }
+
+type ConfigPersister func(domain.Config) error
 
 type ServiceOption func(*Service)
 
@@ -58,6 +61,18 @@ type StackView struct {
 	Members     []ProfileView
 	ActiveCount int
 	Status      StackStatus
+}
+
+type RemoveProfileResult struct {
+	Name              string
+	WasActive         bool
+	ReferencingStacks []string
+	UpdatedStacks     int
+	RemovedStacks     int
+}
+
+type RemoveStackResult struct {
+	Name string
 }
 
 func NewService(config domain.Config, supervisor RuntimeController, opts ...ServiceOption) (*Service, error) {
@@ -233,12 +248,80 @@ func (s *Service) ToggleStack(name string) error {
 	return s.StartStack(name)
 }
 
+func (s *Service) RemoveProfile(name string, removeFromStacks bool, persist ConfigPersister) (RemoveProfileResult, error) {
+	if _, err := s.profile(name); err != nil {
+		return RemoveProfileResult{}, err
+	}
+
+	result := RemoveProfileResult{
+		Name:              name,
+		ReferencingStacks: s.config.StacksReferencingProfile(name),
+	}
+
+	if len(result.ReferencingStacks) > 0 && !removeFromStacks {
+		return RemoveProfileResult{}, fmt.Errorf(
+			"profile %q is still referenced by stacks: %s",
+			name,
+			strings.Join(result.ReferencingStacks, ", "),
+		)
+	}
+
+	if state, exists := s.supervisor.Snapshot(name); exists && isActiveStatus(state.Status) {
+		if err := s.supervisor.Stop(name); err != nil {
+			return RemoveProfileResult{}, fmt.Errorf("stop profile %q before delete: %w", name, err)
+		}
+		result.WasActive = true
+	}
+
+	updatedConfig := cloneConfig(s.config)
+	if !updatedConfig.RemoveProfile(name) {
+		return RemoveProfileResult{}, fmt.Errorf("profile %q not found", name)
+	}
+
+	if removeFromStacks {
+		result.UpdatedStacks, result.RemovedStacks = updatedConfig.RemoveProfileFromStacks(name)
+	}
+
+	if persist != nil {
+		if err := persist(updatedConfig); err != nil {
+			return RemoveProfileResult{}, fmt.Errorf("persist config after deleting profile %q: %w", name, err)
+		}
+	}
+
+	s.applyConfig(updatedConfig)
+	return result, nil
+}
+
+func (s *Service) RemoveStack(name string, persist ConfigPersister) (RemoveStackResult, error) {
+	if _, err := s.stack(name); err != nil {
+		return RemoveStackResult{}, err
+	}
+
+	updatedConfig := cloneConfig(s.config)
+	if !updatedConfig.RemoveStack(name) {
+		return RemoveStackResult{}, fmt.Errorf("stack %q not found", name)
+	}
+
+	if persist != nil {
+		if err := persist(updatedConfig); err != nil {
+			return RemoveStackResult{}, fmt.Errorf("persist config after deleting stack %q: %w", name, err)
+		}
+	}
+
+	s.applyConfig(updatedConfig)
+	return RemoveStackResult{Name: name}, nil
+}
+
 func (s *Service) Subscribe(buffer int) (int, <-chan ltruntime.Event) {
 	return s.supervisor.Subscribe(buffer)
 }
 
 func (s *Service) Unsubscribe(id int) {
 	s.supervisor.Unsubscribe(id)
+}
+
+func (s *Service) Config() domain.Config {
+	return cloneConfig(s.config)
 }
 
 func (s *Service) profile(name string) (domain.Profile, error) {
@@ -257,6 +340,22 @@ func (s *Service) stack(name string) (domain.Stack, error) {
 	}
 
 	return stack, nil
+}
+
+func (s *Service) applyConfig(config domain.Config) {
+	s.config = cloneConfig(config)
+
+	s.profiles = make(map[string]domain.Profile, len(config.Profiles))
+	for _, profile := range config.Profiles {
+		s.profiles[profile.Name] = profile
+	}
+	s.profileList = append([]domain.Profile(nil), config.Profiles...)
+
+	s.stacks = make(map[string]domain.Stack, len(config.Stacks))
+	for _, stack := range config.Stacks {
+		s.stacks[stack.Name] = stack
+	}
+	s.stackList = append([]domain.Stack(nil), config.Stacks...)
 }
 
 func (s *Service) stackView(name string) (StackView, error) {
@@ -397,6 +496,37 @@ func isActiveStatus(status domain.TunnelStatus) bool {
 	default:
 		return false
 	}
+}
+
+func cloneConfig(config domain.Config) domain.Config {
+	cloned := domain.Config{
+		Version:  config.Version,
+		Profiles: make([]domain.Profile, 0, len(config.Profiles)),
+		Stacks:   make([]domain.Stack, 0, len(config.Stacks)),
+	}
+
+	for _, profile := range config.Profiles {
+		profileCopy := profile
+		profileCopy.Labels = append([]string(nil), profile.Labels...)
+		if profile.SSH != nil {
+			sshCopy := *profile.SSH
+			profileCopy.SSH = &sshCopy
+		}
+		if profile.Kubernetes != nil {
+			kubernetesCopy := *profile.Kubernetes
+			profileCopy.Kubernetes = &kubernetesCopy
+		}
+		cloned.Profiles = append(cloned.Profiles, profileCopy)
+	}
+
+	for _, stack := range config.Stacks {
+		stackCopy := stack
+		stackCopy.Labels = append([]string(nil), stack.Labels...)
+		stackCopy.Profiles = append([]string(nil), stack.Profiles...)
+		cloned.Stacks = append(cloned.Stacks, stackCopy)
+	}
+
+	return cloned
 }
 
 type localhostPortChecker struct{}

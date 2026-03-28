@@ -12,6 +12,7 @@ import (
 	"github.com/urzeye/lazytunnel/internal/app"
 	"github.com/urzeye/lazytunnel/internal/domain"
 	ltruntime "github.com/urzeye/lazytunnel/internal/runtime"
+	"github.com/urzeye/lazytunnel/internal/storage"
 )
 
 var (
@@ -72,6 +73,16 @@ var (
 				Foreground(lipgloss.Color("230")).
 				Background(lipgloss.Color("124")).
 				Padding(0, 1)
+	noticeBannerStyle = lipgloss.NewStyle().
+				Bold(true).
+				Foreground(lipgloss.Color("230")).
+				Background(lipgloss.Color("29")).
+				Padding(0, 1)
+	deletePromptStyle = lipgloss.NewStyle().
+				Bold(true).
+				Foreground(lipgloss.Color("230")).
+				Background(lipgloss.Color("94")).
+				Padding(0, 1)
 	filterIdleStyle = lipgloss.NewStyle().
 			Foreground(lipgloss.Color("250")).
 			Background(lipgloss.Color("238")).
@@ -102,6 +113,19 @@ const (
 	focusStacks
 )
 
+type deleteKind string
+
+const (
+	deleteKindProfile deleteKind = "profile"
+	deleteKindStack   deleteKind = "stack"
+)
+
+type deleteRequest struct {
+	Kind    deleteKind
+	Name    string
+	Message string
+}
+
 type Model struct {
 	service         *app.Service
 	configPath      string
@@ -115,6 +139,8 @@ type Model struct {
 	now             time.Time
 	filterQuery     string
 	filterMode      bool
+	pendingDelete   *deleteRequest
+	lastNotice      string
 	lastError       string
 }
 
@@ -152,6 +178,14 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		stacks := filterStackViews(m.service.StackViews(), m.filterQuery)
 		m = m.normalizeSelection(len(profiles), len(stacks))
 
+		if m.pendingDelete != nil {
+			var handled bool
+			m, handled = m.handleDeleteKey(msg, profiles, stacks)
+			if handled {
+				return m, nil
+			}
+		}
+
 		if m.filterMode {
 			var handled bool
 			m, handled = m.handleFilterKey(msg)
@@ -165,6 +199,7 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			m.service.Unsubscribe(m.subscriptionID)
 			return m, tea.Quit
 		case "/":
+			m.lastNotice = ""
 			m.filterMode = true
 			return m, nil
 		case "esc":
@@ -174,6 +209,12 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 				m.selectedStack = 0
 				return m, nil
 			}
+		case "d", "x":
+			m.lastError = ""
+			m.lastNotice = ""
+			m.filterMode = false
+			m.pendingDelete = m.buildDeleteRequest(profiles, stacks)
+			return m, nil
 		case "tab":
 			if len(stacks) > 0 {
 				if m.focus == focusProfiles {
@@ -206,6 +247,7 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			}
 		case "enter", "s":
 			m.lastError = ""
+			m.lastNotice = ""
 			if m.focus == focusStacks && len(stacks) > 0 {
 				if err := m.service.ToggleStack(stacks[m.selectedStack].Stack.Name); err != nil {
 					m.lastError = err.Error()
@@ -240,9 +282,15 @@ func (m Model) View() string {
 	if m.lastError != "" {
 		sections = append(sections, errorBannerStyle.Render("Last error: "+m.lastError))
 	}
+	if m.lastNotice != "" {
+		sections = append(sections, noticeBannerStyle.Render(m.lastNotice))
+	}
+	if m.pendingDelete != nil {
+		sections = append(sections, deletePromptStyle.Render(m.pendingDelete.Message))
+	}
 
 	sections = append(sections, hintStyle.Render(
-		"/ to filter, Esc to clear, Tab or 1/2 to switch lists, j/k or arrows to move, Enter or s to start or stop the selection, q to quit.",
+		"/ to filter, d to delete, Esc to clear or cancel, Tab or 1/2 to switch lists, j/k or arrows to move, Enter or s to start or stop the selection, q to quit.",
 	))
 
 	return appStyle.Width(m.contentWidth()).Render(strings.Join(sections, "\n"))
@@ -662,6 +710,113 @@ func (m Model) handleFilterKey(msg tea.KeyMsg) (Model, bool) {
 	return m, true
 }
 
+func (m Model) handleDeleteKey(msg tea.KeyMsg, profiles []app.ProfileView, stacks []app.StackView) (Model, bool) {
+	switch msg.String() {
+	case "n", "esc":
+		m.pendingDelete = nil
+		m.lastNotice = "Delete cancelled."
+		return m, true
+	case "y", "enter":
+		m = m.confirmDelete()
+		return m, true
+	default:
+		return m, true
+	}
+}
+
+func (m Model) buildDeleteRequest(profiles []app.ProfileView, stacks []app.StackView) *deleteRequest {
+	if m.focus == focusStacks && len(stacks) > 0 {
+		view := stacks[m.selectedStack]
+		message := fmt.Sprintf(
+			"Delete stack %s? This removes the saved stack only; member tunnels keep running. Press y or Enter to confirm, n or Esc to cancel.",
+			view.Stack.Name,
+		)
+		return &deleteRequest{
+			Kind:    deleteKindStack,
+			Name:    view.Stack.Name,
+			Message: message,
+		}
+	}
+
+	if len(profiles) == 0 {
+		return nil
+	}
+
+	view := profiles[m.selectedProfile]
+	config := m.service.Config()
+	stackNames := config.StacksReferencingProfile(view.Profile.Name)
+	impactParts := make([]string, 0, 4)
+	if isActiveTunnelStatus(view.State.Status) {
+		impactParts = append(impactParts, "the running tunnel will be stopped")
+	}
+	if len(stackNames) > 0 {
+		emptyStacks := 0
+		for _, stack := range m.service.Stacks() {
+			if len(stack.Profiles) == 1 && stack.Profiles[0] == view.Profile.Name {
+				emptyStacks++
+			}
+		}
+		impact := fmt.Sprintf("%d stack references will be pruned", len(stackNames))
+		if emptyStacks > 0 {
+			impact += fmt.Sprintf(" and %d empty stacks will be removed", emptyStacks)
+		}
+		impactParts = append(impactParts, impact)
+	}
+	if len(impactParts) == 0 {
+		impactParts = append(impactParts, "this profile will be removed from the saved config")
+	}
+
+	message := fmt.Sprintf(
+		"Delete profile %s? %s. Press y or Enter to confirm, n or Esc to cancel.",
+		view.Profile.Name,
+		strings.Join(impactParts, "; "),
+	)
+	return &deleteRequest{
+		Kind:    deleteKindProfile,
+		Name:    view.Profile.Name,
+		Message: message,
+	}
+}
+
+func (m Model) confirmDelete() Model {
+	request := m.pendingDelete
+	m.pendingDelete = nil
+	m.lastError = ""
+	m.lastNotice = ""
+
+	if request == nil {
+		return m
+	}
+
+	switch request.Kind {
+	case deleteKindProfile:
+		result, err := m.service.RemoveProfile(request.Name, true, func(cfg domain.Config) error {
+			return storage.SaveConfig(m.configPath, cfg)
+		})
+		if err != nil {
+			m.lastError = err.Error()
+			return m
+		}
+
+		m.lastNotice = profileDeleteNotice(result)
+		return m
+
+	case deleteKindStack:
+		result, err := m.service.RemoveStack(request.Name, func(cfg domain.Config) error {
+			return storage.SaveConfig(m.configPath, cfg)
+		})
+		if err != nil {
+			m.lastError = err.Error()
+			return m
+		}
+
+		m.lastNotice = fmt.Sprintf("Removed stack %s.", result.Name)
+		return m
+	default:
+		return m
+	}
+}
+
 func (m Model) contentWidth() int {
 	if m.width <= 0 {
 		return defaultContentWidth
@@ -1009,6 +1164,15 @@ func humanizeDuration(duration time.Duration) string {
 	return fmt.Sprintf("%dd%02dh", days, hours)
 }
 
+func isActiveTunnelStatus(status domain.TunnelStatus) bool {
+	switch status {
+	case domain.TunnelStatusStarting, domain.TunnelStatusRunning, domain.TunnelStatusRestarting:
+		return true
+	default:
+		return false
+	}
+}
+
 func filterProfileViews(views []app.ProfileView, query string) []app.ProfileView {
 	query = normalizeFilterQuery(query)
 	if query == "" {
@@ -1095,6 +1259,22 @@ func formatVisibleCount(visible, total int) string {
 		return fmt.Sprintf("%d", total)
 	}
 	return fmt.Sprintf("%d/%d", visible, total)
+}
+
+func profileDeleteNotice(result app.RemoveProfileResult) string {
+	parts := []string{fmt.Sprintf("Removed profile %s.", result.Name)}
+	if result.WasActive {
+		parts = append(parts, "Stopped the running tunnel first.")
+	}
+	if result.UpdatedStacks > 0 {
+		impact := fmt.Sprintf("Pruned %d stack references", result.UpdatedStacks)
+		if result.RemovedStacks > 0 {
+			impact += fmt.Sprintf(" and removed %d empty stacks", result.RemovedStacks)
+		}
+		parts = append(parts, impact+".")
+	}
+
+	return strings.Join(parts, " ")
 }
 
 func trimLastRune(value string) string {
