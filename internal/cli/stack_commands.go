@@ -2,6 +2,7 @@ package cli
 
 import (
 	"fmt"
+	"strings"
 
 	"github.com/spf13/cobra"
 
@@ -18,8 +19,78 @@ func newStackCommand(configPath *string) *cobra.Command {
 	cmd.AddCommand(
 		newStackListCommand(configPath),
 		newStackAddCommand(configPath),
+		newStackCloneCommand(configPath),
 		newStackRemoveCommand(configPath),
 	)
+
+	return cmd
+}
+
+func newStackCloneCommand(configPath *string) *cobra.Command {
+	var (
+		name        string
+		description string
+		labels      []string
+		profiles    []string
+		clearLabels bool
+		overwrite   bool
+	)
+
+	cmd := &cobra.Command{
+		Use:     "clone <source>",
+		Aliases: []string{"copy", "cp", "duplicate"},
+		Short:   "Clone an existing stack into a new one",
+		Args:    cobra.ExactArgs(1),
+		RunE: func(cmd *cobra.Command, args []string) error {
+			sourceName := strings.TrimSpace(args[0])
+
+			cfg, err := storage.LoadConfig(*configPath)
+			if err != nil {
+				return fmt.Errorf("load config: %w", err)
+			}
+
+			source, exists := findStack(cfg.Stacks, sourceName)
+			if !exists {
+				return fmt.Errorf("stack %q not found", sourceName)
+			}
+
+			stack := cloneStack(source)
+			stack.Name = name
+
+			if cmd.Flags().Changed("description") {
+				stack.Description = description
+			}
+			if clearLabels {
+				stack.Labels = nil
+			}
+			if cmd.Flags().Changed("label") {
+				stack.Labels = cleanList(labels)
+			}
+			if cmd.Flags().Changed("profile") {
+				stack.Profiles = cleanList(profiles)
+			}
+
+			created, err := saveStackConfig(*configPath, cfg, stack, overwrite)
+			if err != nil {
+				return err
+			}
+
+			action := "updated"
+			if created {
+				action = "cloned"
+			}
+			_, _ = fmt.Fprintf(cmd.OutOrStdout(), "%s stack %s from %s\n", action, stack.Name, sourceName)
+			return nil
+		},
+	}
+
+	cmd.Flags().StringVar(&name, "name", "", "new stack name")
+	cmd.Flags().StringVar(&description, "description", "", "override the description on the cloned stack")
+	cmd.Flags().StringSliceVar(&labels, "label", nil, "replace labels on the cloned stack")
+	cmd.Flags().StringSliceVar(&profiles, "profile", nil, "replace the member profile list on the cloned stack")
+	cmd.Flags().BoolVar(&clearLabels, "clear-labels", false, "remove all labels from the cloned stack before applying overrides")
+	cmd.Flags().BoolVar(&overwrite, "overwrite", false, "overwrite an existing stack with the same target name")
+	mustMarkRequired(cmd, "name")
 
 	return cmd
 }
@@ -105,21 +176,9 @@ func newStackAddCommand(configPath *string) *cobra.Command {
 				return fmt.Errorf("load config: %w", err)
 			}
 
-			exists := false
-			for _, existing := range cfg.Stacks {
-				if existing.Name == stack.Name {
-					exists = true
-					break
-				}
-			}
-
-			if exists && !overwrite {
-				return fmt.Errorf("stack %q already exists; use --overwrite to update it", stack.Name)
-			}
-
-			created := cfg.SetStack(stack)
-			if err := storage.SaveConfig(*configPath, cfg); err != nil {
-				return fmt.Errorf("save config: %w", err)
+			created, err := saveStackConfig(*configPath, cfg, stack, overwrite)
+			if err != nil {
+				return err
 			}
 
 			action := "updated"
@@ -139,4 +198,42 @@ func newStackAddCommand(configPath *string) *cobra.Command {
 	mustMarkRequired(cmd, "name", "profile")
 
 	return cmd
+}
+
+func saveStackConfig(configPath string, cfg domain.Config, stack domain.Stack, overwrite bool) (bool, error) {
+	exists := false
+	for _, existing := range cfg.Stacks {
+		if existing.Name == stack.Name {
+			exists = true
+			break
+		}
+	}
+
+	if exists && !overwrite {
+		return false, fmt.Errorf("stack %q already exists; use --overwrite to update it", stack.Name)
+	}
+
+	created := cfg.SetStack(stack)
+	if err := storage.SaveConfig(configPath, cfg); err != nil {
+		return false, fmt.Errorf("save config: %w", err)
+	}
+
+	return created, nil
+}
+
+func findStack(stacks []domain.Stack, name string) (domain.Stack, bool) {
+	for _, stack := range stacks {
+		if stack.Name == name {
+			return stack, true
+		}
+	}
+
+	return domain.Stack{}, false
+}
+
+func cloneStack(stack domain.Stack) domain.Stack {
+	cloned := stack
+	cloned.Labels = append([]string(nil), stack.Labels...)
+	cloned.Profiles = append([]string(nil), stack.Profiles...)
+	return cloned
 }

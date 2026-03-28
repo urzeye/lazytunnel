@@ -98,6 +98,15 @@ lazytunnel profile add kubernetes \
   --local-port 8080
 ```
 
+基于现有 profile 复制一个相近环境的配置：
+
+```bash
+lazytunnel profile clone prod-db \
+  --name staging-db \
+  --local-port 15432 \
+  --description "Staging database tunnel"
+```
+
 校验当前配置：
 
 ```bash
@@ -120,7 +129,7 @@ LazyTunnel 围绕几个高频场景来设计：
 - 把多条 tunnel 组合成一个 stack，按项目批量启动
 - 按名称、标签、目标和端口快速过滤 profile / stack
 - 在启动前识别本地端口冲突
-- 通过 CLI 完成 profile / stack 的新增和删除管理
+- 通过 CLI 完成 profile / stack 的新增、复制和删除管理
 - 直接在 TUI 里带确认地删除 profile / stack
 
 ## 支持的工作流

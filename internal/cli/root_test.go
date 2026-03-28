@@ -193,6 +193,63 @@ func TestProfileRemoveDeletesExistingProfile(t *testing.T) {
 	}
 }
 
+func TestProfileCloneCopiesProfileWithOverrides(t *testing.T) {
+	t.Parallel()
+
+	configPath := filepath.Join(t.TempDir(), "config.yaml")
+	if err := storage.SaveConfig(configPath, storage.SampleConfig()); err != nil {
+		t.Fatalf("save config: %v", err)
+	}
+
+	output := executeCommand(t,
+		"--config", configPath,
+		"profile", "clone", "prod-db",
+		"--name", "staging-db",
+		"--local-port", "15432",
+		"--description", "Staging database tunnel",
+		"--clear-labels",
+		"--label", "staging",
+		"--label", "db",
+	)
+
+	if !strings.Contains(output, "cloned profile staging-db from prod-db") {
+		t.Fatalf("unexpected output: %q", output)
+	}
+
+	cfg, err := storage.LoadConfig(configPath)
+	if err != nil {
+		t.Fatalf("load config: %v", err)
+	}
+
+	if got := len(cfg.Profiles); got != 3 {
+		t.Fatalf("expected 3 profiles, got %d", got)
+	}
+
+	var cloned domain.Profile
+	for _, profile := range cfg.Profiles {
+		if profile.Name == "staging-db" {
+			cloned = profile
+			break
+		}
+	}
+
+	if cloned.Name == "" {
+		t.Fatal("expected cloned profile to exist")
+	}
+	if cloned.LocalPort != 15432 {
+		t.Fatalf("expected cloned local port 15432, got %d", cloned.LocalPort)
+	}
+	if cloned.Description != "Staging database tunnel" {
+		t.Fatalf("unexpected description: %q", cloned.Description)
+	}
+	if got := strings.Join(cloned.Labels, ","); got != "staging,db" {
+		t.Fatalf("unexpected labels: %q", got)
+	}
+	if cloned.SSH == nil || cloned.SSH.Host != "bastion-prod" {
+		t.Fatalf("expected SSH settings to be copied, got %#v", cloned.SSH)
+	}
+}
+
 func TestProfileRemoveRejectsReferencedProfileWithoutFlag(t *testing.T) {
 	t.Parallel()
 
@@ -272,6 +329,58 @@ func TestStackRemoveDeletesExistingStack(t *testing.T) {
 
 	if got := len(cfg.Stacks); got != 0 {
 		t.Fatalf("expected 0 stacks, got %d", got)
+	}
+}
+
+func TestStackCloneCopiesMembersWithOverrides(t *testing.T) {
+	t.Parallel()
+
+	configPath := filepath.Join(t.TempDir(), "config.yaml")
+	if err := storage.SaveConfig(configPath, storage.SampleConfig()); err != nil {
+		t.Fatalf("save config: %v", err)
+	}
+
+	output := executeCommand(t,
+		"--config", configPath,
+		"stack", "clone", "backend-dev",
+		"--name", "backend-staging",
+		"--description", "Staging backend stack",
+		"--profile", "api-debug",
+		"--label", "staging",
+	)
+
+	if !strings.Contains(output, "cloned stack backend-staging from backend-dev") {
+		t.Fatalf("unexpected output: %q", output)
+	}
+
+	cfg, err := storage.LoadConfig(configPath)
+	if err != nil {
+		t.Fatalf("load config: %v", err)
+	}
+
+	if got := len(cfg.Stacks); got != 2 {
+		t.Fatalf("expected 2 stacks, got %d", got)
+	}
+
+	var cloned domain.Stack
+	for _, stack := range cfg.Stacks {
+		if stack.Name == "backend-staging" {
+			cloned = stack
+			break
+		}
+	}
+
+	if cloned.Name == "" {
+		t.Fatal("expected cloned stack to exist")
+	}
+	if cloned.Description != "Staging backend stack" {
+		t.Fatalf("unexpected description: %q", cloned.Description)
+	}
+	if got := strings.Join(cloned.Profiles, ","); got != "api-debug" {
+		t.Fatalf("unexpected profiles: %q", got)
+	}
+	if got := strings.Join(cloned.Labels, ","); got != "staging" {
+		t.Fatalf("unexpected labels: %q", got)
 	}
 }
 

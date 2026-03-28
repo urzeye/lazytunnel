@@ -19,8 +19,79 @@ func newProfileCommand(configPath *string) *cobra.Command {
 	cmd.AddCommand(
 		newProfileListCommand(configPath),
 		newProfileAddCommand(configPath),
+		newProfileCloneCommand(configPath),
 		newProfileRemoveCommand(configPath),
 	)
+
+	return cmd
+}
+
+func newProfileCloneCommand(configPath *string) *cobra.Command {
+	var (
+		name        string
+		description string
+		localPort   int
+		labels      []string
+		clearLabels bool
+		overwrite   bool
+	)
+
+	cmd := &cobra.Command{
+		Use:     "clone <source>",
+		Aliases: []string{"copy", "cp", "duplicate"},
+		Short:   "Clone an existing tunnel profile into a new one",
+		Args:    cobra.ExactArgs(1),
+		RunE: func(cmd *cobra.Command, args []string) error {
+			sourceName := strings.TrimSpace(args[0])
+
+			cfg, err := storage.LoadConfig(*configPath)
+			if err != nil {
+				return fmt.Errorf("load config: %w", err)
+			}
+
+			source, exists := findProfile(cfg.Profiles, sourceName)
+			if !exists {
+				return fmt.Errorf("profile %q not found", sourceName)
+			}
+
+			profile := cloneProfile(source)
+			profile.Name = name
+
+			if cmd.Flags().Changed("description") {
+				profile.Description = description
+			}
+			if cmd.Flags().Changed("local-port") {
+				profile.LocalPort = localPort
+			}
+			if clearLabels {
+				profile.Labels = nil
+			}
+			if cmd.Flags().Changed("label") {
+				profile.Labels = cleanList(labels)
+			}
+
+			created, err := saveProfileConfig(*configPath, cfg, profile, overwrite)
+			if err != nil {
+				return err
+			}
+
+			action := "updated"
+			if created {
+				action = "cloned"
+			}
+
+			_, _ = fmt.Fprintf(cmd.OutOrStdout(), "%s profile %s from %s\n", action, profile.Name, sourceName)
+			return nil
+		},
+	}
+
+	cmd.Flags().StringVar(&name, "name", "", "new profile name")
+	cmd.Flags().StringVar(&description, "description", "", "override the description on the cloned profile")
+	cmd.Flags().IntVar(&localPort, "local-port", 0, "override the local port on the cloned profile")
+	cmd.Flags().StringSliceVar(&labels, "label", nil, "replace labels on the cloned profile")
+	cmd.Flags().BoolVar(&clearLabels, "clear-labels", false, "remove all labels from the cloned profile before applying overrides")
+	cmd.Flags().BoolVar(&overwrite, "overwrite", false, "overwrite an existing profile with the same target name")
+	mustMarkRequired(cmd, "name")
 
 	return cmd
 }
@@ -274,6 +345,10 @@ func saveProfile(configPath string, profile domain.Profile, overwrite bool) (boo
 		return false, fmt.Errorf("load config: %w", err)
 	}
 
+	return saveProfileConfig(configPath, cfg, profile, overwrite)
+}
+
+func saveProfileConfig(configPath string, cfg domain.Config, profile domain.Profile, overwrite bool) (bool, error) {
 	exists := false
 	for _, existing := range cfg.Profiles {
 		if existing.Name == profile.Name {
@@ -292,6 +367,31 @@ func saveProfile(configPath string, profile domain.Profile, overwrite bool) (boo
 	}
 
 	return created, nil
+}
+
+func findProfile(profiles []domain.Profile, name string) (domain.Profile, bool) {
+	for _, profile := range profiles {
+		if profile.Name == name {
+			return profile, true
+		}
+	}
+
+	return domain.Profile{}, false
+}
+
+func cloneProfile(profile domain.Profile) domain.Profile {
+	cloned := profile
+	cloned.Labels = append([]string(nil), profile.Labels...)
+	if profile.SSH != nil {
+		sshCopy := *profile.SSH
+		cloned.SSH = &sshCopy
+	}
+	if profile.Kubernetes != nil {
+		kubernetesCopy := *profile.Kubernetes
+		cloned.Kubernetes = &kubernetesCopy
+	}
+
+	return cloned
 }
 
 func mustMarkRequired(cmd *cobra.Command, names ...string) {
