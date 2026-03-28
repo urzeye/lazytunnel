@@ -2101,44 +2101,54 @@ func renderSizedBlock(style lipgloss.Style, width int, body string) string {
 }
 
 func renderStatusBadge(status domain.TunnelStatus) string {
-	label := " STP "
-	style := lipgloss.NewStyle().Bold(true).Foreground(lipgloss.Color("230")).Background(lipgloss.Color("240"))
+	label := "STOP"
+	background := lipgloss.Color("240")
 
 	switch status {
 	case domain.TunnelStatusRunning:
-		label = " RUN "
-		style = style.Background(lipgloss.Color("29"))
+		label = "RUN"
+		background = lipgloss.Color("29")
 	case domain.TunnelStatusStarting:
-		label = " NEW "
-		style = style.Background(lipgloss.Color("31"))
+		label = "START"
+		background = lipgloss.Color("31")
 	case domain.TunnelStatusRestarting:
-		label = " RET "
-		style = style.Background(lipgloss.Color("136"))
+		label = "RETRY"
+		background = lipgloss.Color("136")
 	case domain.TunnelStatusFailed:
-		label = " ERR "
-		style = style.Background(lipgloss.Color("124"))
+		label = "FAIL"
+		background = lipgloss.Color("124")
 	case domain.TunnelStatusExited:
-		label = " EXT "
-		style = style.Background(lipgloss.Color("239"))
+		label = "EXIT"
+		background = lipgloss.Color("239")
 	}
 
-	return style.Render(label)
+	return renderStateBadge(label, background)
 }
 
 func renderStackStatusBadge(status app.StackStatus) string {
-	label := " STP "
-	style := lipgloss.NewStyle().Bold(true).Foreground(lipgloss.Color("230")).Background(lipgloss.Color("240"))
+	label := "STOP"
+	background := lipgloss.Color("240")
 
 	switch status {
 	case app.StackStatusRunning:
-		label = " RUN "
-		style = style.Background(lipgloss.Color("29"))
+		label = "RUN"
+		background = lipgloss.Color("29")
 	case app.StackStatusPartial:
-		label = " PAR "
-		style = style.Background(lipgloss.Color("136"))
+		label = "PART"
+		background = lipgloss.Color("136")
 	}
 
-	return style.Render(label)
+	return renderStateBadge(label, background)
+}
+
+func renderStateBadge(label string, background lipgloss.Color) string {
+	return lipgloss.NewStyle().
+		Bold(true).
+		Foreground(lipgloss.Color("230")).
+		Background(background).
+		Width(7).
+		Align(lipgloss.Center).
+		Render(label)
 }
 
 func renderLogSourceBadge(source domain.LogSource) string {

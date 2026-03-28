@@ -234,6 +234,31 @@ func TestRenderInspectorTabsShowsKeyHints(t *testing.T) {
 	}
 }
 
+func TestRenderStatusBadgeUsesReadableWords(t *testing.T) {
+	t.Parallel()
+
+	if got := renderStatusBadge(domain.TunnelStatusStopped); !strings.Contains(got, "STOP") {
+		t.Fatalf("expected STOP badge, got %q", got)
+	}
+	if got := renderStatusBadge(domain.TunnelStatusRestarting); !strings.Contains(got, "RETRY") {
+		t.Fatalf("expected RETRY badge, got %q", got)
+	}
+	if got := renderStatusBadge(domain.TunnelStatusStarting); !strings.Contains(got, "START") {
+		t.Fatalf("expected START badge, got %q", got)
+	}
+}
+
+func TestRenderStackStatusBadgeUsesReadableWords(t *testing.T) {
+	t.Parallel()
+
+	if got := renderStackStatusBadge(app.StackStatusStopped); !strings.Contains(got, "STOP") {
+		t.Fatalf("expected STOP stack badge, got %q", got)
+	}
+	if got := renderStackStatusBadge(app.StackStatusPartial); !strings.Contains(got, "PART") {
+		t.Fatalf("expected PART stack badge, got %q", got)
+	}
+}
+
 func TestFormatLastExit(t *testing.T) {
 	t.Parallel()
 
