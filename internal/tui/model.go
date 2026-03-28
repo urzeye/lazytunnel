@@ -2,6 +2,8 @@ package tui
 
 import (
 	"fmt"
+	"os"
+	"os/exec"
 	"slices"
 	"strings"
 	"time"
@@ -132,6 +134,9 @@ const (
 
 type runtimeEventMsg ltruntime.Event
 type clockTickMsg time.Time
+type editorFinishedMsg struct {
+	err error
+}
 
 type listFocus int
 type inspectorTab int
@@ -208,6 +213,15 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	case runtimeEventMsg:
 		return m, waitForRuntimeEvent(m.events)
 
+	case editorFinishedMsg:
+		if msg.err != nil {
+			m.lastError = "Editor exited with an error: " + msg.err.Error()
+			return m, nil
+		}
+
+		m = m.reloadConfigFromDisk("Reloaded config after editing.")
+		return m, nil
+
 	case tea.KeyMsg:
 		profiles := filterProfileViews(m.service.ProfileViews(), m.filterQuery)
 		stacks := filterStackViews(m.service.StackViews(), m.filterQuery)
@@ -234,6 +248,15 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			m, handled = m.handleInspectorKey(msg, profiles, stacks)
 			if handled {
 				return m, nil
+			}
+		}
+
+		{
+			var handled bool
+			var cmd tea.Cmd
+			m, cmd, handled = m.handleWorkspaceKey(msg)
+			if handled {
+				return m, cmd
 			}
 		}
 
@@ -407,6 +430,8 @@ func (m Model) renderHintLine(width int) string {
 		message = "Delete mode: y or Enter confirms. n or Esc cancels."
 	case m.filterMode:
 		message = "Filter mode: type to search. Enter finishes. Esc cancels. Backspace/Ctrl+W deletes. Ctrl+U clears."
+	case m.workspaceIsEmpty():
+		message = "i init sample  a add draft profile  e edit config  r reload  / filter  q quit"
 	}
 
 	return renderInlineText(hintStyle, message, width)
@@ -465,10 +490,14 @@ func (m Model) renderProfilesPanel(views []app.ProfileView, width, height int) s
 
 	title := panelListTitle("Profiles", len(views), 0, len(views))
 	if len(views) == 0 {
-		message := "No profiles yet. Run `lazytunnel init --sample` to start from the example config."
 		if m.filterQuery != "" {
-			message = fmt.Sprintf("No profiles match %q. Press Esc to clear the filter.", m.filterQuery)
+			message := fmt.Sprintf("No profiles match %q. Press Esc to clear the filter.", m.filterQuery)
+			return renderFixedPanel(title, []string{mutedStyle.Render(truncateText(message, innerWidth))}, width, height, focused)
 		}
+		if m.workspaceIsEmpty() {
+			return renderFixedPanel(title, m.renderEmptyProfilesLines(innerWidth), width, height, focused)
+		}
+		message := "No profiles yet. Press a to add a starter draft or e to edit the config file."
 		return renderFixedPanel(title, []string{mutedStyle.Render(truncateText(message, innerWidth))}, width, height, focused)
 	}
 
@@ -601,6 +630,9 @@ func (m Model) currentInspectorLines(profiles []app.ProfileView, stacks []app.St
 	}
 	if m.filterQuery != "" {
 		return []string{mutedStyle.Render(truncateText("No profile matches the current filter.", width))}
+	}
+	if m.workspaceIsEmpty() {
+		return m.renderEmptyInspectorLines(width)
 	}
 	return []string{mutedStyle.Render(truncateText("No profile selected.", width))}
 }
@@ -829,6 +861,158 @@ func (m Model) handleFilterKey(msg tea.KeyMsg) (Model, bool) {
 	m.selectedStack = 0
 	m.inspectorScroll = 0
 	return m, true
+}
+
+func (m Model) handleWorkspaceKey(msg tea.KeyMsg) (Model, tea.Cmd, bool) {
+	switch msg.String() {
+	case "r":
+		m = m.reloadConfigFromDisk("Reloaded config from disk.")
+		return m, nil, true
+	case "e":
+		if err := m.ensureConfigFileExists(); err != nil {
+			m.lastError = err.Error()
+			return m, nil, true
+		}
+		m.lastError = ""
+		m.lastNotice = ""
+		return m, openEditorCmd(m.configPath), true
+	case "i":
+		if !m.workspaceIsEmpty() {
+			return m, nil, false
+		}
+		m = m.initializeSampleConfig()
+		return m, nil, true
+	case "a":
+		m = m.createStarterProfileDraft()
+		return m, nil, true
+	default:
+		return m, nil, false
+	}
+}
+
+func (m Model) workspaceIsEmpty() bool {
+	config := m.service.Config()
+	return len(config.Profiles) == 0 && len(config.Stacks) == 0
+}
+
+func (m Model) initializeSampleConfig() Model {
+	m.lastError = ""
+	m.lastNotice = ""
+	m.filterQuery = ""
+	m.filterMode = false
+
+	cfg := storage.SampleConfig()
+	if err := storage.SaveConfig(m.configPath, cfg); err != nil {
+		m.lastError = "Initialize sample config: " + err.Error()
+		return m
+	}
+
+	m.service.ReplaceConfig(cfg)
+	m.focus = focusProfiles
+	m.selectedProfile = 0
+	m.selectedStack = 0
+	m.inspectorTab = inspectorTabDetails
+	m.inspectorScroll = 0
+	m.lastNotice = "Initialized sample config with starter profiles and a stack."
+	return m
+}
+
+func (m Model) createStarterProfileDraft() Model {
+	m.lastError = ""
+	m.lastNotice = ""
+	m.filterQuery = ""
+	m.filterMode = false
+
+	cfg := m.service.Config()
+	profile := starterSSHProfileDraft(cfg)
+	cfg.SetProfile(profile)
+
+	if err := storage.SaveConfig(m.configPath, cfg); err != nil {
+		m.lastError = "Create starter profile: " + err.Error()
+		return m
+	}
+
+	m.service.ReplaceConfig(cfg)
+	m.focus = focusProfiles
+	m.selectedStack = 0
+	m.inspectorTab = inspectorTabDetails
+	m.inspectorScroll = 0
+	m.selectProfileByName(profile.Name)
+	m.lastNotice = fmt.Sprintf("Created starter profile %s. Press e to refine the config.", profile.Name)
+	return m
+}
+
+func (m Model) reloadConfigFromDisk(successNotice string) Model {
+	m.lastError = ""
+	m.lastNotice = ""
+
+	cfg, err := storage.LoadConfig(m.configPath)
+	if err != nil {
+		m.lastError = "Reload config: " + err.Error()
+		return m
+	}
+
+	m.service.ReplaceConfig(cfg)
+	m.selectedProfile = 0
+	m.selectedStack = 0
+	m.inspectorScroll = 0
+	m.pendingDelete = nil
+	m.lastNotice = successNotice
+	return m
+}
+
+func (m *Model) selectProfileByName(name string) {
+	for idx, view := range m.service.ProfileViews() {
+		if view.Profile.Name != name {
+			continue
+		}
+		m.selectedProfile = idx
+		return
+	}
+	m.selectedProfile = 0
+}
+
+func (m Model) ensureConfigFileExists() error {
+	if _, err := os.Stat(m.configPath); err == nil {
+		return nil
+	} else if !os.IsNotExist(err) {
+		return fmt.Errorf("stat config file: %w", err)
+	}
+
+	if err := storage.SaveConfig(m.configPath, m.service.Config()); err != nil {
+		return fmt.Errorf("create config file: %w", err)
+	}
+
+	return nil
+}
+
+func openEditorCmd(path string) tea.Cmd {
+	shell := os.Getenv("SHELL")
+	if strings.TrimSpace(shell) == "" {
+		shell = "/bin/sh"
+	}
+
+	editor := preferredEditor()
+	command := fmt.Sprintf("%s %s", editor, shellQuote(path))
+	process := exec.Command(shell, "-lc", command)
+
+	return tea.ExecProcess(process, func(err error) tea.Msg {
+		return editorFinishedMsg{err: err}
+	})
+}
+
+func preferredEditor() string {
+	if editor := strings.TrimSpace(os.Getenv("VISUAL")); editor != "" {
+		return editor
+	}
+	if editor := strings.TrimSpace(os.Getenv("EDITOR")); editor != "" {
+		return editor
+	}
+	return "vi"
+}
+
+func shellQuote(value string) string {
+	return "'" + strings.ReplaceAll(value, "'", `'"'"'`) + "'"
 }
 
 func (m Model) handleInspectorKey(msg tea.KeyMsg, profiles []app.ProfileView, stacks []app.StackView) (Model, bool) {
@@ -1229,6 +1413,96 @@ func (m Model) selectedValueStyle(profiles []app.ProfileView, stacks []app.Stack
 		return headerSelectedEmptyValueStyle
 	}
 	return headerSelectedValueStyle
+}
+
+func (m Model) renderEmptyProfilesLines(width int) []string {
+	return []string{
+		composeStyledLine(renderActionChip("i", "sample")+"  ", renderActionChip("a", "draft profile"), width),
+		composeStyledLine(renderActionChip("e", "edit config")+"  ", renderActionChip("r", "reload"), width),
+		mutedStyle.Render(truncateText("No profiles yet. Start here.", width)),
+	}
+}
+
+func (m Model) renderEmptyInspectorLines(width int) []string {
+	return []string{
+		groupTitleStyle.Render("Quick Start"),
+		sectionTextStyle.Render(truncateText("The workspace is empty. Create tunnels or load an example config.", width)),
+		"",
+		renderActionLine("i", "seed sample SSH and Kubernetes tunnels", width),
+		renderActionLine("a", "create a starter SSH profile draft", width),
+		renderActionLine("e", "open the YAML config in your editor", width),
+		renderActionLine("r", "reload external config edits", width),
+		"",
+		renderCompactKeyValue("Config", m.configPath, width),
+	}
+}
+
+func renderActionLine(key, description string, width int) string {
+	prefix := codeStyle.Render(" " + key + " ")
+	return composeStyledLine(prefix+" ", description, width)
+}
+
+func renderActionChip(key, label string) string {
+	return lipgloss.JoinHorizontal(
+		lipgloss.Center,
+		codeStyle.Render(" "+key+" "),
+		" ",
+		sectionTextStyle.Render(label),
+	)
+}
+
+func starterSSHProfileDraft(cfg domain.Config) domain.Profile {
+	return domain.Profile{
+		Name:        nextProfileDraftName(cfg, "draft-ssh"),
+		Description: "Starter SSH tunnel draft. Update the target before using it.",
+		Type:        domain.TunnelTypeSSHLocal,
+		LocalPort:   nextAvailableLocalPort(cfg, 15432),
+		Restart: domain.RestartPolicy{
+			Enabled:        true,
+			MaxRetries:     0,
+			InitialBackoff: "2s",
+			MaxBackoff:     "30s",
+		},
+		Labels: []string{"draft"},
+		SSH: &domain.SSHLocal{
+			Host:       "example-bastion",
+			RemoteHost: "127.0.0.1",
+			RemotePort: 5432,
+		},
+	}
+}
+
+func nextProfileDraftName(cfg domain.Config, base string) string {
+	names := make(map[string]struct{}, len(cfg.Profiles))
+	for _, profile := range cfg.Profiles {
+		names[profile.Name] = struct{}{}
+	}
+
+	if _, exists := names[base]; !exists {
+		return base
+	}
+
+	for idx := 2; ; idx++ {
+		candidate := fmt.Sprintf("%s-%d", base, idx)
+		if _, exists := names[candidate]; !exists {
+			return candidate
+		}
+	}
+}
+
+func nextAvailableLocalPort(cfg domain.Config, start int) int {
+	used := make(map[int]struct{}, len(cfg.Profiles))
+	for _, profile := range cfg.Profiles {
+		used[profile.LocalPort] = struct{}{}
+	}
+
+	port := start
+	for {
+		if _, exists := used[port]; !exists {
+			return port
+		}
+		port++
+	}
 }
 
 func renderInspectorTab(label string, active bool) string {

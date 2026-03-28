@@ -324,6 +324,10 @@ func (s *Service) Config() domain.Config {
 	return cloneConfig(s.config)
 }
 
+func (s *Service) ReplaceConfig(config domain.Config) {
+	s.applyConfig(config)
+}
+
 func (s *Service) profile(name string) (domain.Profile, error) {
 	profile, exists := s.profiles[name]
 	if !exists {

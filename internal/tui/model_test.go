@@ -205,6 +205,112 @@ func TestTrimLastWord(t *testing.T) {
 	}
 }
 
+func TestNextProfileDraftNameAddsSuffixWhenNeeded(t *testing.T) {
+	t.Parallel()
+
+	cfg := domain.Config{
+		Version: domain.CurrentConfigVersion,
+		Profiles: []domain.Profile{
+			{Name: "draft-ssh"},
+			{Name: "draft-ssh-2"},
+		},
+	}
+
+	if got := nextProfileDraftName(cfg, "draft-ssh"); got != "draft-ssh-3" {
+		t.Fatalf("nextProfileDraftName() = %q, want %q", got, "draft-ssh-3")
+	}
+}
+
+func TestNextAvailableLocalPortSkipsUsedPorts(t *testing.T) {
+	t.Parallel()
+
+	cfg := domain.Config{
+		Version: domain.CurrentConfigVersion,
+		Profiles: []domain.Profile{
+			{LocalPort: 15432},
+			{LocalPort: 15433},
+		},
+	}
+
+	if got := nextAvailableLocalPort(cfg, 15432); got != 15434 {
+		t.Fatalf("nextAvailableLocalPort() = %d, want %d", got, 15434)
+	}
+}
+
+func TestCreateStarterProfileDraftPersistsAndSelects(t *testing.T) {
+	t.Parallel()
+
+	configPath := filepath.Join(t.TempDir(), "config.yaml")
+	service, err := app.NewService(domain.DefaultConfig(), newStubRuntimeController())
+	if err != nil {
+		t.Fatalf("new service: %v", err)
+	}
+
+	model := Model{
+		service:    service,
+		configPath: configPath,
+	}
+
+	model = model.createStarterProfileDraft()
+
+	if model.lastError != "" {
+		t.Fatalf("expected no error, got %q", model.lastError)
+	}
+	if !strings.Contains(model.lastNotice, "Created starter profile") {
+		t.Fatalf("expected creation notice, got %q", model.lastNotice)
+	}
+
+	views := model.service.ProfileViews()
+	if len(views) != 1 {
+		t.Fatalf("expected 1 profile view, got %d", len(views))
+	}
+	if got := views[model.selectedProfile].Profile.Name; got != "draft-ssh" {
+		t.Fatalf("expected selected profile draft-ssh, got %q", got)
+	}
+
+	cfg, err := storage.LoadConfig(configPath)
+	if err != nil {
+		t.Fatalf("load config: %v", err)
+	}
+	if len(cfg.Profiles) != 1 {
+		t.Fatalf("expected persisted profile, got %d", len(cfg.Profiles))
+	}
+	if cfg.Profiles[0].SSH == nil || cfg.Profiles[0].SSH.Host != "example-bastion" {
+		t.Fatalf("unexpected persisted profile: %#v", cfg.Profiles[0])
+	}
+}
+
+func TestReloadConfigFromDiskReplacesServiceConfig(t *testing.T) {
+	t.Parallel()
+
+	configPath := filepath.Join(t.TempDir(), "config.yaml")
+	if err := storage.SaveConfig(configPath, storage.SampleConfig()); err != nil {
+		t.Fatalf("save config: %v", err)
+	}
+
+	service, err := app.NewService(domain.DefaultConfig(), newStubRuntimeController())
+	if err != nil {
+		t.Fatalf("new service: %v", err)
+	}
+
+	model := Model{
+		service:    service,
+		configPath: configPath,
+	}
+
+	model = model.reloadConfigFromDisk("Reloaded config from disk.")
+
+	if model.lastError != "" {
+		t.Fatalf("expected no error, got %q", model.lastError)
+	}
+	if got := len(model.service.ProfileViews()); got != 2 {
+		t.Fatalf("expected 2 reloaded profiles, got %d", got)
+	}
+	if got := len(model.service.StackViews()); got != 1 {
+		t.Fatalf("expected 1 reloaded stack, got %d", got)
+	}
+}
+
 func TestBuildDeleteRequestIncludesStackImpact(t *testing.T) {
 	t.Parallel()
 
