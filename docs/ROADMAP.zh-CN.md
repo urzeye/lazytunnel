@@ -24,13 +24,19 @@
 - SSH 本地转发
 - Kubernetes 端口转发
 - stack 启动
-- 自动重连和日志
+- 自动重连和基础日志
+
+### v0.1.x
+
+- Homebrew 支持
+- 打磨 TUI 日志面板的格式、样式和过滤
+- 增加从 `~/.ssh/config` 和 Kubernetes context 的导入
+- 如果体验上仍然有明显缺口，再补显式手动 restart 动作
 
 ### v0.2
 
 - `ssh -R`
 - `ssh -D`
-- 更完整的导入流程
 - 更好的健康检查
 
 ### v0.3
@@ -41,6 +47,6 @@
 
 ## 当前重点
 
-- 把 tunnel profile 模型定清楚
-- 设计主界面的 TUI 布局
-- 优先把 `ssh -L` 和 `kubectl port-forward` 这两个工作流做好
+- 优化日志面板的格式、样式和过滤体验
+- 增加从 `~/.ssh/config` 和 Kubernetes context 的导入能力
+- 继续把 `ssh -L` 和 `kubectl port-forward` 这两个核心工作流打磨到足够顺手

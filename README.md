@@ -7,9 +7,12 @@ English | [简体中文](README.zh-CN.md)
 LazyTunnel is a keyboard-first workspace for the tunnels you use every day:
 
 - SSH local forwards with `ssh -L`
+- Kubernetes port-forwards with `kubectl port-forward`
+
+Planned later:
+
 - SSH remote forwards with `ssh -R`
 - SSH SOCKS proxies with `ssh -D`
-- Kubernetes port-forwards with `kubectl port-forward`
 
 Instead of retyping long commands, remembering ports, and reopening dropped sessions by hand, you manage everything from one terminal UI.
 
@@ -126,26 +129,32 @@ lazytunnel
 LazyTunnel is designed around a few strong workflows:
 
 - save tunnel profiles instead of retyping commands
-- start, stop, and restart tunnels with one key
-- monitor status, uptime, ports, and recent errors in one place
+- start and stop tunnels from the TUI
+- monitor status, uptime, ports, recent errors, and recent logs in one place
 - group multiple tunnels into a stack and start them together
 - filter profiles and stacks by name, label, target, and port
 - detect local port conflicts before startup
 - manage config from the CLI with add, clone, edit, and remove commands
 - delete profiles and stacks directly from the TUI with confirmation
+- switch the TUI between English and Simplified Chinese instantly
 
-## Supported Workflows
+## Supported Today
 
 - SSH local forward: `ssh -L`
+- Kubernetes port-forward for `pod`, `service`, and `deployment`
+
+## Planned Later
+
 - SSH remote forward: `ssh -R`
 - SSH dynamic proxy: `ssh -D`
-- Kubernetes port-forward for `pod`, `service`, and `deployment`
 
 ## Near-Term Roadmap
 
 - richer runtime status, reconnect insight, and log surfaces in the TUI
+- log formatting, visual polish, and filtering inside the logs inspector
 - better project stacks with labels and preflight validation
-- guided import flows for common SSH and Kubernetes setups
+- guided import flows from `~/.ssh/config` and Kubernetes contexts
+- an explicit manual restart action in the TUI if start/stop still feels insufficient
 
 ## Non-Goals
 

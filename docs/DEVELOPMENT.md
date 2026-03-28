@@ -11,9 +11,9 @@ This document turns the product roadmap into an execution plan.
   - Kubernetes port-forwarding with `kubectl port-forward`
 - release goal for v0.1:
   - downloadable binaries from GitHub Releases
-  - Homebrew installation
   - mise installation
   - optional `go install` for Go users
+  - Homebrew installation deferred to v0.1.x
 
 ## Suggested Tech Stack
 
@@ -133,7 +133,7 @@ Exit criteria:
 - profile list
 - detail panel
 - status badges
-- start, stop, restart actions
+- start and stop actions
 - logs panel
 - stack start action
 
@@ -145,8 +145,8 @@ Exit criteria:
 
 - add `goreleaser`
 - publish binaries for macOS, Linux, and Windows
-- add Homebrew formula support
 - verify `mise` installation
+- record Homebrew as post-v0.1.0 packaging work
 
 Exit criteria:
 
@@ -174,9 +174,27 @@ v0.1 is ready when all of the following are true:
 - recent logs are visible in the UI
 - the README includes installation and a short demo
 
+## v0.1.0 Release Decision
+
+The recommended `v0.1.0` release scope is:
+
+- GitHub Releases binaries
+- `go install`
+- `mise` install from GitHub Releases
+
+The following should not block `v0.1.0`:
+
+- Homebrew
+- `ssh -R`
+- `ssh -D`
+- imports from `~/.ssh/config` and Kubernetes contexts
+- deeper log formatting, styling, and filtering polish
+- an explicit manual restart action
+
 ## Immediate Next Steps
 
-- improve the logs panel and status details in the TUI
+- improve log formatting, visual hierarchy, and filtering in the TUI
 - add stack-focused keyboard polish and clearer action hints
 - import from `~/.ssh/config` and Kubernetes contexts
+- evaluate whether an explicit manual restart action is still needed after log/import polish
 - add release automation with `goreleaser`

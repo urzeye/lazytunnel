@@ -7,9 +7,12 @@
 LazyTunnel 是一个键盘优先的终端工作台，专门管理你每天会用到的各种隧道：
 
 - 用 `ssh -L` 建立的本地端口转发
+- 用 `kubectl port-forward` 建立的 Kubernetes 端口转发
+
+后续支持：
+
 - 用 `ssh -R` 建立的远程端口转发
 - 用 `ssh -D` 建立的 SOCKS 代理
-- 用 `kubectl port-forward` 建立的 Kubernetes 端口转发
 
 它的目标不是发明新的连接方式，而是把这些原本零散、重复、容易中断的命令，统一收进一个终端界面里管理。
 
@@ -133,26 +136,32 @@ lazytunnel
 LazyTunnel 围绕几个高频场景来设计：
 
 - 保存 tunnel profile，而不是反复手敲命令
-- 一键启动、停止、重启 tunnel
-- 在一个界面里查看状态、运行时长、端口和最近错误
+- 在 TUI 里快速启动和停止 tunnel
+- 在一个界面里查看状态、运行时长、端口、最近错误和最近日志
 - 把多条 tunnel 组合成一个 stack，按项目批量启动
 - 按名称、标签、目标和端口快速过滤 profile / stack
 - 在启动前识别本地端口冲突
 - 通过 CLI 完成 profile / stack 的新增、复制、修改和删除管理
 - 直接在 TUI 里带确认地删除 profile / stack
+- 直接在 TUI 里切换英文和简体中文
 
-## 支持的工作流
+## 当前支持的工作流
 
 - SSH 本地转发：`ssh -L`
+- Kubernetes `pod`、`service`、`deployment` 的端口转发
+
+## 后续支持
+
 - SSH 远程转发：`ssh -R`
 - SSH 动态代理：`ssh -D`
-- Kubernetes `pod`、`service`、`deployment` 的端口转发
 
 ## 近期路线
 
 - 在 TUI 里补齐更完整的运行状态、重连信息和日志视图
+- 优化日志面板的格式、样式和过滤体验
 - 继续增强按项目组织 stack、标签和预检查能力
-- 为常见 SSH / Kubernetes 配置提供更顺手的导入流程
+- 增加从 `~/.ssh/config` 和 Kubernetes context 的导入流程
+- 如果开始/停止还不够顺手，再补显式手动 restart 动作
 
 ## 明确不做什么
 

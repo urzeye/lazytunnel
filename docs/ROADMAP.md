@@ -24,13 +24,19 @@ The first usable version should focus on a small but high-value slice:
 - SSH local forwards
 - Kubernetes port-forwards
 - stack startup
-- reconnect and logs
+- reconnect and basic logs
+
+### v0.1.x
+
+- Homebrew support
+- log formatting, styling, and filtering polish in the TUI
+- imports from `~/.ssh/config` and Kubernetes contexts
+- an explicit manual restart action in the TUI if it still feels necessary
 
 ### v0.2
 
 - `ssh -R`
 - `ssh -D`
-- richer import flows
 - better health checks
 
 ### v0.3
@@ -41,6 +47,6 @@ The first usable version should focus on a small but high-value slice:
 
 ## Current Focus
 
-- nail the tunnel profile model
-- design the main TUI layout
-- make the first two workflows feel great: `ssh -L` and `kubectl port-forward`
+- improve the logs inspector with better formatting, styling, and filtering
+- add imports from `~/.ssh/config` and Kubernetes contexts
+- keep `ssh -R` and `ssh -D` as a later phase after the current core workflows feel solid

@@ -11,9 +11,9 @@
   - 用 `kubectl port-forward` 做 Kubernetes 端口转发
 - v0.1 的发布目标：
   - 通过 GitHub Releases 提供二进制
-  - 支持 Homebrew 安装
   - 支持 mise 安装
   - 为 Go 用户提供可选的 `go install`
+  - Homebrew 安装延后到 v0.1.x
 
 ## 建议技术栈
 
@@ -133,7 +133,7 @@ pkg/
 - profile 列表
 - 详情面板
 - 状态标记
-- 启动、停止、重启操作
+- 启动、停止操作
 - 日志面板
 - stack 启动动作
 
@@ -145,8 +145,8 @@ pkg/
 
 - 增加 `goreleaser`
 - 发布 macOS、Linux、Windows 二进制
-- 增加 Homebrew formula 支持
 - 验证 mise 安装
+- 记录 Homebrew 为后续版本支持
 
 完成标准：
 
@@ -174,9 +174,27 @@ pkg/
 - UI 中可以看到最近日志
 - README 已包含安装方式和一个简短演示
 
+## v0.1.0 发布决策
+
+当前建议先发布 `v0.1.0`，范围控制在：
+
+- GitHub Releases 二进制
+- `go install`
+- `mise` 可从 GitHub Releases 获取安装
+
+暂不阻塞 `v0.1.0` 的事项：
+
+- Homebrew
+- `ssh -R`
+- `ssh -D`
+- 从 `~/.ssh/config` 和 Kubernetes context 导入
+- 日志面板的进一步格式、样式、过滤优化
+- 显式手动 restart 动作
+
 ## 接下来立刻要做的事
 
-- 打磨 TUI 里的日志面板和状态细节
+- 打磨 TUI 里的日志格式、样式和过滤体验
 - 补强 stack 相关快捷键和操作提示
 - 增加从 `~/.ssh/config` 和 Kubernetes context 导入
+- 在日志和导入能力补齐后，再评估是否需要显式手动 restart 动作
 - 接入 `goreleaser` 自动发布
