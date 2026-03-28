@@ -693,9 +693,16 @@ func (m Model) renderProfileDetailLines(view app.ProfileView, width int) []strin
 		lines = append(lines, renderCompactKeyValue("Exec", spec.DisplayCommand(), width))
 	}
 
+	problemLines := make([]string, 0, 2)
+	if specErr != nil {
+		problemLines = append(problemLines, renderCompactKeyValue("Config", specErr.Error(), width))
+	}
 	if view.State.LastError != "" {
+		problemLines = append(problemLines, renderCompactKeyValue("Error", view.State.LastError, width))
+	}
+	if len(problemLines) > 0 {
 		lines = append(lines, groupTitleStyle.Render("Problem"))
-		lines = append(lines, renderCompactKeyValue("Error", view.State.LastError, width))
+		lines = append(lines, problemLines...)
 	}
 
 	lines = append(lines, groupTitleStyle.Render("Actions"))
@@ -728,6 +735,11 @@ func (m Model) renderStackDetailLines(view app.StackView, width int) []string {
 				width,
 			))
 		}
+	}
+
+	if missingProfiles := missingStackProfiles(view); len(missingProfiles) > 0 {
+		lines = append(lines, groupTitleStyle.Render("Problem"))
+		lines = append(lines, renderCompactKeyValue("Missing", strings.Join(missingProfiles, ", "), width))
 	}
 
 	configLines := make([]string, 0, 4)
@@ -2134,6 +2146,23 @@ func stackMembersSummary(view app.StackView) string {
 	}
 
 	return strings.Join(names, ", ")
+}
+
+func missingStackProfiles(view app.StackView) []string {
+	resolved := make(map[string]struct{}, len(view.Members))
+	for _, member := range view.Members {
+		resolved[member.Profile.Name] = struct{}{}
+	}
+
+	missing := make([]string, 0)
+	for _, profileName := range view.Stack.Profiles {
+		if _, exists := resolved[profileName]; exists {
+			continue
+		}
+		missing = append(missing, profileName)
+	}
+
+	return missing
 }
 
 func formatPID(pid int) string {

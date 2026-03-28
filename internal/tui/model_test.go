@@ -57,6 +57,56 @@ func TestProfileTarget(t *testing.T) {
 	}
 }
 
+func TestRenderProfileDetailLinesShowsConfigProblem(t *testing.T) {
+	t.Parallel()
+
+	model := Model{
+		now: time.Date(2026, 3, 28, 11, 0, 0, 0, time.UTC),
+	}
+
+	lines := model.renderProfileDetailLines(app.ProfileView{
+		Profile: domain.Profile{
+			Name:      "broken-ssh",
+			Type:      domain.TunnelTypeSSHLocal,
+			LocalPort: 15432,
+			Restart: domain.RestartPolicy{
+				Enabled: true,
+			},
+		},
+	}, 80)
+
+	rendered := strings.Join(lines, "\n")
+	if !strings.Contains(rendered, "Problem") {
+		t.Fatalf("expected problem section, got %q", rendered)
+	}
+	if !strings.Contains(rendered, "ssh settings are required") {
+		t.Fatalf("expected config validation message, got %q", rendered)
+	}
+}
+
+func TestRenderStackDetailLinesShowsMissingProfiles(t *testing.T) {
+	t.Parallel()
+
+	model := Model{}
+	lines := model.renderStackDetailLines(app.StackView{
+		Stack: domain.Stack{
+			Name:     "backend-dev",
+			Profiles: []string{"prod-db", "missing-api"},
+		},
+		Members: []app.ProfileView{
+			{Profile: domain.Profile{Name: "prod-db", LocalPort: 5432}},
+		},
+	}, 80)
+
+	rendered := strings.Join(lines, "\n")
+	if !strings.Contains(rendered, "Problem") {
+		t.Fatalf("expected problem section, got %q", rendered)
+	}
+	if !strings.Contains(rendered, "missing-api") {
+		t.Fatalf("expected missing profile name, got %q", rendered)
+	}
+}
+
 func TestRecentStackActivitySortsAndLimits(t *testing.T) {
 	t.Parallel()
 
