@@ -263,6 +263,21 @@ func (s *Service) ToggleProfile(name string) error {
 	return s.StartProfile(name)
 }
 
+func (s *Service) RestartProfile(name string) error {
+	profile, err := s.profile(name)
+	if err != nil {
+		return err
+	}
+
+	if _, exists := s.supervisor.Snapshot(name); exists {
+		if err := s.supervisor.Stop(name); err != nil {
+			return fmt.Errorf("stop profile %q before restart: %w", name, err)
+		}
+	}
+
+	return s.startProfile(profile)
+}
+
 func (s *Service) ToggleStack(name string) error {
 	stackView, err := s.stackView(name)
 	if err != nil {
@@ -271,6 +286,28 @@ func (s *Service) ToggleStack(name string) error {
 
 	if stackView.Status == StackStatusRunning {
 		return s.StopStack(name)
+	}
+
+	return s.StartStack(name)
+}
+
+func (s *Service) RestartStack(name string) error {
+	stack, err := s.stack(name)
+	if err != nil {
+		return err
+	}
+
+	var errs []error
+	for _, profileName := range stack.Profiles {
+		if _, exists := s.supervisor.Snapshot(profileName); !exists {
+			continue
+		}
+		if err := s.supervisor.Stop(profileName); err != nil {
+			errs = append(errs, fmt.Errorf("profile %q: %w", profileName, err))
+		}
+	}
+	if len(errs) > 0 {
+		return errors.Join(errs...)
 	}
 
 	return s.StartStack(name)

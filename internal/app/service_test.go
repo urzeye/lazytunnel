@@ -99,6 +99,32 @@ func TestServiceToggleProfileStopsActiveTunnel(t *testing.T) {
 	}
 }
 
+func TestServiceRestartProfileStopsThenStartsTunnel(t *testing.T) {
+	t.Parallel()
+
+	runtime := newFakeRuntimeController()
+	runtime.statesByName["prod-db"] = domain.RuntimeState{
+		ProfileName: "prod-db",
+		Status:      domain.TunnelStatusRunning,
+	}
+
+	service, err := NewService(testConfig(), runtime, WithPortChecker(fakePortChecker{}))
+	if err != nil {
+		t.Fatalf("new service: %v", err)
+	}
+
+	if err := service.RestartProfile("prod-db"); err != nil {
+		t.Fatalf("restart profile: %v", err)
+	}
+
+	if len(runtime.stoppedNames) != 1 || runtime.stoppedNames[0] != "prod-db" {
+		t.Fatalf("expected stop call for prod-db, got %#v", runtime.stoppedNames)
+	}
+	if len(runtime.startedSpecs) != 1 || runtime.startedSpecs[0].Name != "prod-db" {
+		t.Fatalf("expected restart start call for prod-db, got %#v", runtime.startedSpecs)
+	}
+}
+
 func TestServiceAnalyzeProfileStartReportsConfigProblems(t *testing.T) {
 	t.Parallel()
 
@@ -314,6 +340,36 @@ func TestServiceToggleStackStopsWhenFullyRunning(t *testing.T) {
 
 	if len(runtime.stoppedNames) != 2 {
 		t.Fatalf("expected 2 stop calls, got %#v", runtime.stoppedNames)
+	}
+}
+
+func TestServiceRestartStackStopsMembersThenStartsThemAgain(t *testing.T) {
+	t.Parallel()
+
+	runtime := newFakeRuntimeController()
+	runtime.statesByName["prod-db"] = domain.RuntimeState{
+		ProfileName: "prod-db",
+		Status:      domain.TunnelStatusRunning,
+	}
+	runtime.statesByName["api-debug"] = domain.RuntimeState{
+		ProfileName: "api-debug",
+		Status:      domain.TunnelStatusRunning,
+	}
+
+	service, err := NewService(testConfig(), runtime, WithPortChecker(fakePortChecker{}))
+	if err != nil {
+		t.Fatalf("new service: %v", err)
+	}
+
+	if err := service.RestartStack("backend-dev"); err != nil {
+		t.Fatalf("restart stack: %v", err)
+	}
+
+	if len(runtime.stoppedNames) != 2 {
+		t.Fatalf("expected 2 stop calls, got %#v", runtime.stoppedNames)
+	}
+	if len(runtime.startedSpecs) != 2 {
+		t.Fatalf("expected 2 restarted specs, got %#v", runtime.startedSpecs)
 	}
 }
 

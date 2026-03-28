@@ -331,6 +331,18 @@ func TestRenderProfileRowMarksSelection(t *testing.T) {
 	}
 }
 
+func TestProfileActionLinesIncludeRestart(t *testing.T) {
+	t.Parallel()
+
+	model := Model{}
+	lines := model.profileActionLines(app.ProfileView{}, 40)
+	rendered := strings.Join(lines, "\n")
+
+	if !strings.Contains(rendered, "R") || !strings.Contains(rendered, "restart tunnel") {
+		t.Fatalf("expected restart action in profile actions, got %q", rendered)
+	}
+}
+
 func TestRenderInspectorTabsShowsKeyHints(t *testing.T) {
 	t.Parallel()
 
@@ -1054,6 +1066,44 @@ func TestHintMessageMentionsInspectorTabs(t *testing.T) {
 	got := model.hintMessage()
 	if !strings.Contains(got, "h/l inspector") {
 		t.Fatalf("expected inspector tab hint, got %q", got)
+	}
+	if !strings.Contains(got, "R restart") {
+		t.Fatalf("expected restart hint, got %q", got)
+	}
+}
+
+func TestRestartSelectionRestartsSelectedProfile(t *testing.T) {
+	t.Parallel()
+
+	runtime := newStubRuntimeController()
+	runtime.states["prod-db"] = domain.RuntimeState{
+		ProfileName: "prod-db",
+		Status:      domain.TunnelStatusRunning,
+		PID:         1,
+	}
+
+	service, err := app.NewService(storage.SampleConfig(), runtime)
+	if err != nil {
+		t.Fatalf("new service: %v", err)
+	}
+
+	model := Model{service: service}
+	profiles := filterProfileViews(service.ProfileViews(), "")
+	stacks := filterStackViews(service.StackViews(), "")
+	model = model.restartSelection(profiles, stacks)
+
+	if model.lastError != "" {
+		t.Fatalf("expected no restart error, got %q", model.lastError)
+	}
+	if !strings.Contains(model.lastNotice, "Restarted profile prod-db.") {
+		t.Fatalf("expected restart notice, got %q", model.lastNotice)
+	}
+	if len(runtime.stoppedNames) != 1 || runtime.stoppedNames[0] != "prod-db" {
+		t.Fatalf("expected prod-db to be stopped before restart, got %#v", runtime.stoppedNames)
+	}
+	state, ok := runtime.states["prod-db"]
+	if !ok || state.Status != domain.TunnelStatusRunning {
+		t.Fatalf("expected prod-db to be running after restart, got %#v", state)
 	}
 }
 

@@ -373,6 +373,9 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 				}
 			}
 			return m, nil
+		case "R":
+			m = m.restartSelection(profiles, stacks)
+			return m, nil
 		}
 	}
 
@@ -490,11 +493,11 @@ func (m Model) hintMessage() string {
 	case profileCount == 0:
 		return m.t("a draft profile  e edit config  r reload  L language  / filter  q quit", "a 配置草稿  e 编辑配置  r 重新加载  L 切换语言  / 筛选  q 退出")
 	case stackCount == 0:
-		return m.t("j/k move  h/l inspector  c clone profile  A draft stack  e edit config  L language  / filter  q quit", "j/k 移动  h/l 检查器  c 克隆配置  A 组合草稿  e 编辑配置  L 切换语言  / 筛选  q 退出")
+		return m.t("j/k move  h/l inspector  Enter toggle  R restart  c clone profile  A draft stack  e edit config  L language  / filter  q quit", "j/k 移动  h/l 检查器  Enter 切换  R 重启  c 克隆配置  A 组合草稿  e 编辑配置  L 切换语言  / 筛选  q 退出")
 	case m.focus == focusStacks:
-		return m.t("j/k move  Tab lists  h/l inspector  Enter toggle stack  c clone stack  A draft stack  d delete  L language  / filter  q quit", "j/k 移动  Tab 列表  h/l 检查器  Enter 切换组合  c 克隆组合  A 组合草稿  d 删除  L 切换语言  / 筛选  q 退出")
+		return m.t("j/k move  Tab lists  h/l inspector  Enter toggle stack  R restart stack  c clone stack  A draft stack  d delete  L language  / filter  q quit", "j/k 移动  Tab 列表  h/l 检查器  Enter 切换组合  R 重启组合  c 克隆组合  A 组合草稿  d 删除  L 切换语言  / 筛选  q 退出")
 	default:
-		return m.t("j/k move  Tab lists  h/l inspector  Enter toggle  c clone profile  A draft stack  d delete  L language  / filter  q quit", "j/k 移动  Tab 列表  h/l 检查器  Enter 切换  c 克隆配置  A 组合草稿  d 删除  L 切换语言  / 筛选  q 退出")
+		return m.t("j/k move  Tab lists  h/l inspector  Enter toggle  R restart  c clone profile  A draft stack  d delete  L language  / filter  q quit", "j/k 移动  Tab 列表  h/l 检查器  Enter 切换  R 重启  c 克隆配置  A 组合草稿  d 删除  L 切换语言  / 筛选  q 退出")
 	}
 }
 
@@ -1115,6 +1118,39 @@ func (m Model) cloneSelection(profiles []app.ProfileView, stacks []app.StackView
 		return m
 	}
 	m.lastError = m.t("Nothing is selected to clone yet.", "当前还没有选中任何可克隆的条目。")
+	return m
+}
+
+func (m Model) restartSelection(profiles []app.ProfileView, stacks []app.StackView) Model {
+	m.lastError = ""
+	m.lastNotice = ""
+
+	if m.focus == focusStacks && len(stacks) > 0 {
+		name := stacks[max(0, min(m.selectedStack, len(stacks)-1))].Stack.Name
+		if err := m.service.RestartStack(name); err != nil {
+			m.lastError = err.Error()
+			return m
+		}
+		m.lastNotice = m.tf("Restarted stack %s.", "已重启组合 %s。", name)
+		return m
+	}
+
+	if len(profiles) > 0 {
+		name := profiles[max(0, min(m.selectedProfile, len(profiles)-1))].Profile.Name
+		if err := m.service.RestartProfile(name); err != nil {
+			m.lastError = err.Error()
+			return m
+		}
+		m.lastNotice = m.tf("Restarted profile %s.", "已重启配置 %s。", name)
+		return m
+	}
+
+	if m.filterQuery != "" {
+		m.lastError = m.t("No visible item to restart. Clear the filter or select a different item.", "没有可见项可重启。请清除筛选或换一个条目。")
+		return m
+	}
+
+	m.lastError = m.t("Nothing is selected to restart yet.", "当前还没有选中任何可重启的条目。")
 	return m
 }
 
@@ -1908,6 +1944,7 @@ func (m Model) profileActionLines(view app.ProfileView, width int) []string {
 
 	return []string{
 		renderActionLine("Enter", toggleLabel, width),
+		renderActionLine("R", m.t("restart tunnel", "重启隧道"), width),
 		renderActionLine("c", m.t("clone profile draft", "克隆配置草稿"), width),
 		renderActionLine("A", m.t("create stack draft from profile", "从配置创建组合草稿"), width),
 		renderActionLine("e", m.t("edit config file", "编辑配置文件"), width),
@@ -1923,6 +1960,7 @@ func (m Model) stackActionLines(view app.StackView, width int) []string {
 
 	return []string{
 		renderActionLine("Enter", toggleLabel, width),
+		renderActionLine("R", m.t("restart stack", "重启组合"), width),
 		renderActionLine("c", m.t("clone stack draft", "克隆组合草稿"), width),
 		renderActionLine("A", m.t("create another stack draft", "再创建一个组合草稿"), width),
 		renderActionLine("e", m.t("edit config file", "编辑配置文件"), width),
