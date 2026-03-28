@@ -44,11 +44,18 @@ func NewRootCommand() *cobra.Command {
 		},
 	}
 
-	cmd.Flags().StringVar(
+	cmd.PersistentFlags().StringVar(
 		&configPath,
 		"config",
 		configPath,
 		"path to the LazyTunnel config file",
+	)
+
+	cmd.AddCommand(
+		newInitCommand(&configPath),
+		newValidateCommand(&configPath),
+		newProfileCommand(&configPath),
+		newStackCommand(&configPath),
 	)
 
 	return cmd

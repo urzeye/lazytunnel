@@ -1,6 +1,7 @@
 package storage
 
 import (
+	"os"
 	"path/filepath"
 	"testing"
 
@@ -34,5 +35,41 @@ func TestLoadConfigParsesExampleConfig(t *testing.T) {
 
 	if got, want := len(cfg.Stacks), 1; got != want {
 		t.Fatalf("expected %d stack, got %d", want, got)
+	}
+}
+
+func TestSaveConfigRoundTrips(t *testing.T) {
+	t.Parallel()
+
+	path := filepath.Join(t.TempDir(), "config.yaml")
+	want := SampleConfig()
+
+	if err := SaveConfig(path, want); err != nil {
+		t.Fatalf("save config: %v", err)
+	}
+
+	got, err := LoadConfig(path)
+	if err != nil {
+		t.Fatalf("load config: %v", err)
+	}
+
+	if len(got.Profiles) != len(want.Profiles) {
+		t.Fatalf("expected %d profiles, got %d", len(want.Profiles), len(got.Profiles))
+	}
+	if len(got.Stacks) != len(want.Stacks) {
+		t.Fatalf("expected %d stacks, got %d", len(want.Stacks), len(got.Stacks))
+	}
+}
+
+func TestSaveConfigCreatesParentDirectory(t *testing.T) {
+	t.Parallel()
+
+	path := filepath.Join(t.TempDir(), "nested", "config.yaml")
+	if err := SaveConfig(path, domain.DefaultConfig()); err != nil {
+		t.Fatalf("save config: %v", err)
+	}
+
+	if _, err := os.Stat(path); err != nil {
+		t.Fatalf("expected config to exist: %v", err)
 	}
 }

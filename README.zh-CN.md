@@ -26,6 +26,50 @@ LazyTunnel 是一个键盘优先的终端工作台，专门管理你每天会用
 
 LazyTunnel 想做的，就是把这类日常操作做成像 `lazygit`、`lazydocker` 一样顺手的开发者工具。
 
+## 快速开始
+
+初始化一个空配置：
+
+```bash
+lazytunnel init
+```
+
+如果你想先从示例配置开始：
+
+```bash
+lazytunnel init --sample
+```
+
+添加一个 SSH 本地转发 profile：
+
+```bash
+lazytunnel profile add ssh-local \
+  --name prod-db \
+  --host bastion-prod \
+  --remote-host db.internal \
+  --remote-port 5432 \
+  --local-port 5432
+```
+
+添加一个 Kubernetes 端口转发 profile：
+
+```bash
+lazytunnel profile add kubernetes \
+  --name api-debug \
+  --context dev-cluster \
+  --namespace backend \
+  --resource-type service \
+  --resource api \
+  --remote-port 80 \
+  --local-port 8080
+```
+
+校验当前配置：
+
+```bash
+lazytunnel validate
+```
+
 ## 核心能力
 
 LazyTunnel 围绕几个高频场景来设计：

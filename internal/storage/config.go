@@ -45,3 +45,85 @@ func LoadConfig(path string) (domain.Config, error) {
 
 	return cfg, nil
 }
+
+func SaveConfig(path string, cfg domain.Config) error {
+	cfg.Normalize()
+	if err := cfg.Validate(); err != nil {
+		return err
+	}
+
+	if err := os.MkdirAll(filepath.Dir(path), 0o755); err != nil {
+		return fmt.Errorf("create config directory: %w", err)
+	}
+
+	file, err := os.Create(path)
+	if err != nil {
+		return fmt.Errorf("create file: %w", err)
+	}
+	defer file.Close()
+
+	encoder := yaml.NewEncoder(file)
+	encoder.SetIndent(2)
+	if err := encoder.Encode(cfg); err != nil {
+		return fmt.Errorf("encode yaml: %w", err)
+	}
+
+	if err := encoder.Close(); err != nil {
+		return fmt.Errorf("close encoder: %w", err)
+	}
+
+	return nil
+}
+
+func SampleConfig() domain.Config {
+	return domain.Config{
+		Version: domain.CurrentConfigVersion,
+		Profiles: []domain.Profile{
+			{
+				Name:        "prod-db",
+				Description: "Access the production database through an SSH bastion.",
+				Type:        domain.TunnelTypeSSHLocal,
+				LocalPort:   5432,
+				Labels:      []string{"prod", "db"},
+				Restart: domain.RestartPolicy{
+					Enabled:        true,
+					MaxRetries:     0,
+					InitialBackoff: "2s",
+					MaxBackoff:     "30s",
+				},
+				SSH: &domain.SSHLocal{
+					Host:       "bastion-prod",
+					RemoteHost: "db.internal",
+					RemotePort: 5432,
+				},
+			},
+			{
+				Name:        "api-debug",
+				Description: "Forward the API service from the dev cluster.",
+				Type:        domain.TunnelTypeKubernetesPortForward,
+				LocalPort:   8080,
+				Labels:      []string{"dev", "api"},
+				Restart: domain.RestartPolicy{
+					Enabled:        true,
+					MaxRetries:     0,
+					InitialBackoff: "2s",
+					MaxBackoff:     "30s",
+				},
+				Kubernetes: &domain.Kubernetes{
+					Context:      "dev-cluster",
+					Namespace:    "backend",
+					ResourceType: "service",
+					Resource:     "api",
+					RemotePort:   80,
+				},
+			},
+		},
+		Stacks: []domain.Stack{
+			{
+				Name:        "backend-dev",
+				Description: "Daily backend development stack.",
+				Profiles:    []string{"prod-db", "api-debug"},
+			},
+		},
+	}
+}

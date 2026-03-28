@@ -71,6 +71,30 @@ func DefaultConfig() Config {
 	return Config{Version: CurrentConfigVersion}
 }
 
+func (c *Config) SetProfile(profile Profile) (created bool) {
+	for idx := range c.Profiles {
+		if c.Profiles[idx].Name == profile.Name {
+			c.Profiles[idx] = profile
+			return false
+		}
+	}
+
+	c.Profiles = append(c.Profiles, profile)
+	return true
+}
+
+func (c *Config) SetStack(stack Stack) (created bool) {
+	for idx := range c.Stacks {
+		if c.Stacks[idx].Name == stack.Name {
+			c.Stacks[idx] = stack
+			return false
+		}
+	}
+
+	c.Stacks = append(c.Stacks, stack)
+	return true
+}
+
 func (c *Config) Normalize() {
 	if c.Version == 0 {
 		c.Version = CurrentConfigVersion

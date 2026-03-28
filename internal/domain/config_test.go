@@ -125,3 +125,56 @@ func TestProfileValidateRejectsIncompleteKubernetesProfile(t *testing.T) {
 		}
 	}
 }
+
+func TestConfigSetProfileReplacesExistingProfileByName(t *testing.T) {
+	t.Parallel()
+
+	cfg := DefaultConfig()
+	cfg.Profiles = []Profile{
+		{
+			Name:      "prod-db",
+			Type:      TunnelTypeSSHLocal,
+			LocalPort: 5432,
+			SSH: &SSHLocal{
+				Host:       "bastion-a",
+				RemoteHost: "db.internal",
+				RemotePort: 5432,
+			},
+		},
+	}
+
+	created := cfg.SetProfile(Profile{
+		Name:      "prod-db",
+		Type:      TunnelTypeSSHLocal,
+		LocalPort: 15432,
+		SSH: &SSHLocal{
+			Host:       "bastion-b",
+			RemoteHost: "db.internal",
+			RemotePort: 5432,
+		},
+	})
+	if created {
+		t.Fatal("expected replacement instead of create")
+	}
+
+	if got := cfg.Profiles[0].LocalPort; got != 15432 {
+		t.Fatalf("expected replaced local port 15432, got %d", got)
+	}
+}
+
+func TestConfigSetStackAppendsNewStack(t *testing.T) {
+	t.Parallel()
+
+	cfg := DefaultConfig()
+	created := cfg.SetStack(Stack{
+		Name:     "backend",
+		Profiles: []string{"prod-db"},
+	})
+	if !created {
+		t.Fatal("expected stack to be created")
+	}
+
+	if got := len(cfg.Stacks); got != 1 {
+		t.Fatalf("expected 1 stack, got %d", got)
+	}
+}

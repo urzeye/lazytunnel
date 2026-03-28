@@ -26,6 +26,50 @@ Tunnel commands are powerful, but they are also annoying to manage in real life:
 
 LazyTunnel aims to make these workflows feel as smooth as `lazygit` and `lazydocker`, but for local development tunnels and temporary access paths.
 
+## Quick Start
+
+Initialize an empty config:
+
+```bash
+lazytunnel init
+```
+
+Or start from the bundled sample config:
+
+```bash
+lazytunnel init --sample
+```
+
+Add an SSH local-forward profile:
+
+```bash
+lazytunnel profile add ssh-local \
+  --name prod-db \
+  --host bastion-prod \
+  --remote-host db.internal \
+  --remote-port 5432 \
+  --local-port 5432
+```
+
+Add a Kubernetes port-forward profile:
+
+```bash
+lazytunnel profile add kubernetes \
+  --name api-debug \
+  --context dev-cluster \
+  --namespace backend \
+  --resource-type service \
+  --resource api \
+  --remote-port 80 \
+  --local-port 8080
+```
+
+Validate your config:
+
+```bash
+lazytunnel validate
+```
+
 ## Key Features
 
 LazyTunnel is designed around a few strong workflows:
