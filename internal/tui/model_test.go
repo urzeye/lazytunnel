@@ -227,6 +227,51 @@ func TestBuildDeleteRequestIncludesStackImpact(t *testing.T) {
 	}
 }
 
+func TestWindowAroundSelectionCentersWhenPossible(t *testing.T) {
+	t.Parallel()
+
+	start, end := windowAroundSelection(10, 5, 4)
+	if start != 3 || end != 7 {
+		t.Fatalf("windowAroundSelection() = (%d, %d), want (3, 7)", start, end)
+	}
+}
+
+func TestWindowAroundSelectionPinsToEdges(t *testing.T) {
+	t.Parallel()
+
+	start, end := windowAroundSelection(10, 0, 4)
+	if start != 0 || end != 4 {
+		t.Fatalf("expected leading edge window, got (%d, %d)", start, end)
+	}
+
+	start, end = windowAroundSelection(10, 9, 4)
+	if start != 6 || end != 10 {
+		t.Fatalf("expected trailing edge window, got (%d, %d)", start, end)
+	}
+}
+
+func TestClipLinesUsesOffsetAndLimit(t *testing.T) {
+	t.Parallel()
+
+	got := clipLines([]string{"a", "b", "c", "d"}, 1, 2)
+	want := []string{"b", "c"}
+	if strings.Join(got, ",") != strings.Join(want, ",") {
+		t.Fatalf("clipLines() = %#v, want %#v", got, want)
+	}
+}
+
+func TestSplitListInspectorHeightsKeepsInspectorLarger(t *testing.T) {
+	t.Parallel()
+
+	listHeight, inspectorHeight := splitListInspectorHeights(18)
+	if listHeight+inspectorHeight+1 != 18 {
+		t.Fatalf("expected heights to fill total budget, got %d + %d + 1", listHeight, inspectorHeight)
+	}
+	if inspectorHeight <= listHeight {
+		t.Fatalf("expected inspector to be larger than list, got list=%d inspector=%d", listHeight, inspectorHeight)
+	}
+}
+
 func TestConfirmDeletePersistsProfileRemoval(t *testing.T) {
 	t.Parallel()
 
