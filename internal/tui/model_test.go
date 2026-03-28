@@ -6,6 +6,7 @@ import (
 	"testing"
 	"time"
 
+	tea "github.com/charmbracelet/bubbletea"
 	"github.com/charmbracelet/lipgloss"
 	"github.com/urzeye/lazytunnel/internal/app"
 	"github.com/urzeye/lazytunnel/internal/domain"
@@ -372,6 +373,20 @@ func TestRenderLogLineShowsProfileBadgeAndNormalizedMessage(t *testing.T) {
 	}
 }
 
+func TestRenderHeaderFilterSegmentUsesLogContextInLogsTab(t *testing.T) {
+	t.Parallel()
+
+	model := Model{inspectorTab: inspectorTabLogs}
+	got := model.renderHeaderFilterSegment(28)
+
+	if !strings.Contains(got, "Logs") {
+		t.Fatalf("expected logs label, got %q", got)
+	}
+	if !strings.Contains(got, "message, source, profile") {
+		t.Fatalf("expected log filter placeholder, got %q", got)
+	}
+}
+
 func TestRenderStatusBadgeUsesReadableWords(t *testing.T) {
 	t.Parallel()
 
@@ -490,6 +505,80 @@ func TestFilterStackViewsMatchesMembersAndLabels(t *testing.T) {
 
 	if got := filterStackViews(views, "infra"); len(got) != 1 || got[0].Stack.Name != "ops" {
 		t.Fatalf("expected label filter to match ops, got %#v", got)
+	}
+}
+
+func TestFilterLogEntriesMatchesMessageAndSource(t *testing.T) {
+	t.Parallel()
+
+	base := time.Date(2026, 3, 28, 11, 0, 0, 0, time.UTC)
+	entries := []domain.LogEntry{
+		{Timestamp: base, Source: domain.LogSourceSystem, Message: "process started"},
+		{Timestamp: base.Add(time.Second), Source: domain.LogSourceStderr, Message: "dial tcp timeout"},
+	}
+
+	if got := filterLogEntries(entries, "stderr"); len(got) != 1 || got[0].Message != "dial tcp timeout" {
+		t.Fatalf("expected stderr filter to match error log, got %#v", got)
+	}
+
+	if got := filterLogEntries(entries, "started"); len(got) != 1 || got[0].Message != "process started" {
+		t.Fatalf("expected message filter to match system log, got %#v", got)
+	}
+}
+
+func TestFilterStackActivityMatchesProfileName(t *testing.T) {
+	t.Parallel()
+
+	base := time.Date(2026, 3, 28, 11, 0, 0, 0, time.UTC)
+	entries := []stackActivityEntry{
+		{
+			ProfileName: "prod-db",
+			Log: domain.LogEntry{
+				Timestamp: base,
+				Source:    domain.LogSourceStdout,
+				Message:   "ready",
+			},
+		},
+		{
+			ProfileName: "api-debug",
+			Log: domain.LogEntry{
+				Timestamp: base.Add(time.Second),
+				Source:    domain.LogSourceSystem,
+				Message:   "process started",
+			},
+		},
+	}
+
+	if got := filterStackActivity(entries, "api-debug"); len(got) != 1 || got[0].ProfileName != "api-debug" {
+		t.Fatalf("expected profile-name filter to match api-debug, got %#v", got)
+	}
+}
+
+func TestHandleFilterKeyUpdatesLogFilterIndependently(t *testing.T) {
+	t.Parallel()
+
+	model := Model{
+		filterQuery:     "prod",
+		logFilterQuery:  "",
+		filterMode:      true,
+		filterScope:     filterScopeLogs,
+		inspectorTab:    inspectorTabLogs,
+		selectedProfile: 1,
+		selectedStack:   1,
+	}
+
+	next, handled := model.handleFilterKey(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'e'}})
+	if !handled {
+		t.Fatal("expected log filter key to be handled")
+	}
+	if next.logFilterQuery != "e" {
+		t.Fatalf("expected log filter query to update, got %q", next.logFilterQuery)
+	}
+	if next.filterQuery != "prod" {
+		t.Fatalf("expected list filter query to stay unchanged, got %q", next.filterQuery)
+	}
+	if next.selectedProfile != 1 || next.selectedStack != 1 {
+		t.Fatalf("expected selection to stay unchanged, got profile=%d stack=%d", next.selectedProfile, next.selectedStack)
 	}
 }
 

@@ -163,6 +163,7 @@ type editorFinishedMsg struct {
 
 type listFocus int
 type inspectorTab int
+type filterScope int
 
 const (
 	focusProfiles listFocus = iota
@@ -172,6 +173,11 @@ const (
 const (
 	inspectorTabDetails inspectorTab = iota
 	inspectorTabLogs
+)
+
+const (
+	filterScopeList filterScope = iota
+	filterScopeLogs
 )
 
 type deleteKind string
@@ -199,7 +205,9 @@ type Model struct {
 	height          int
 	now             time.Time
 	filterQuery     string
+	logFilterQuery  string
 	filterMode      bool
+	filterScope     filterScope
 	pendingDelete   *deleteRequest
 	inspectorTab    inspectorTab
 	inspectorScroll int
@@ -290,9 +298,16 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		case "/":
 			m.lastNotice = ""
 			m.filterMode = true
+			m.filterScope = m.defaultFilterScope()
 			return m, nil
 		case "esc":
-			if m.filterQuery != "" {
+			if m.defaultFilterScope() == filterScopeLogs {
+				if m.logFilterQuery != "" {
+					m.logFilterQuery = ""
+					m.inspectorScroll = 0
+					return m, nil
+				}
+			} else if m.filterQuery != "" {
 				m.filterQuery = ""
 				m.selectedProfile = 0
 				m.selectedStack = 0
@@ -461,7 +476,10 @@ func (m Model) hintMessage() string {
 	case m.pendingDelete != nil:
 		return m.t("Delete mode: y or Enter confirms. n or Esc cancels.", "删除模式: y 或 Enter 确认，n 或 Esc 取消。")
 	case m.filterMode:
-		return m.t("Filter mode: type to search. Enter finishes. Esc cancels. Backspace/Ctrl+W deletes. Ctrl+U clears.", "筛选模式: 输入即可搜索。Enter 完成，Esc 取消，Backspace/Ctrl+W 删除，Ctrl+U 清空。")
+		if m.filterScope == filterScopeLogs {
+			return m.t("Log filter mode: type to search messages, sources, and profile names. Enter finishes. Esc clears or exits. Backspace/Ctrl+W deletes. Ctrl+U clears.", "日志筛选模式: 可搜索消息、来源和 profile 名。Enter 完成，Esc 清空或退出，Backspace/Ctrl+W 删除，Ctrl+U 清空。")
+		}
+		return m.t("Filter mode: type to search names, labels, targets, and ports. Enter finishes. Esc clears or exits. Backspace/Ctrl+W deletes. Ctrl+U clears.", "筛选模式: 可搜索名称、标签、目标和端口。Enter 完成，Esc 清空或退出，Backspace/Ctrl+W 删除，Ctrl+U 清空。")
 	case m.workspaceIsEmpty():
 		return m.t("i init sample  a draft profile  e edit config  r reload  L language  / filter  q quit", "i 示例配置  a 配置草稿  e 编辑配置  r 重新加载  L 切换语言  / 筛选  q 退出")
 	}
@@ -803,13 +821,17 @@ func (m Model) renderStackDetailLines(view app.StackView, width int) []string {
 }
 
 func (m Model) renderProfileLogLines(view app.ProfileView, width int) []string {
+	filtered := filterLogEntries(view.State.RecentLogs, m.logFilterQuery)
 	if len(view.State.RecentLogs) == 0 {
 		return []string{mutedStyle.Render(truncateText(m.t("No logs yet. Start the tunnel to collect runtime output.", "还没有日志。启动隧道后，这里会显示运行输出。"), width))}
 	}
+	if len(filtered) == 0 {
+		return []string{mutedStyle.Render(truncateText(m.tf("No logs match %q. Press Esc to clear the log filter.", "没有匹配 %q 的日志。按 Esc 清除日志筛选。", m.logFilterQuery), width))}
+	}
 
-	lines := make([]string, 0, len(view.State.RecentLogs))
-	for idx := len(view.State.RecentLogs) - 1; idx >= 0; idx-- {
-		entry := view.State.RecentLogs[idx]
+	lines := make([]string, 0, len(filtered))
+	for idx := len(filtered) - 1; idx >= 0; idx-- {
+		entry := filtered[idx]
 		lines = append(lines, renderLogLine(entry.Timestamp, "", entry.Source, entry.Message, width))
 	}
 
@@ -825,7 +847,11 @@ func (m Model) renderStackLogLines(view app.StackView, width int) []string {
 		return []string{mutedStyle.Render(truncateText(m.t("No recent stack activity yet. Start a member to begin collecting logs.", "还没有最近的组合活动。启动任一成员后，这里会开始显示日志。"), width))}
 	}
 
-	activity := recentStackActivity(view, totalEntries)
+	activity := filterStackActivity(recentStackActivity(view, totalEntries), m.logFilterQuery)
+	if len(activity) == 0 {
+		return []string{mutedStyle.Render(truncateText(m.tf("No stack logs match %q. Press Esc to clear the log filter.", "没有匹配 %q 的组合日志。按 Esc 清除日志筛选。", m.logFilterQuery), width))}
+	}
+
 	lines := make([]string, 0, len(activity))
 	for idx := len(activity) - 1; idx >= 0; idx-- {
 		entry := activity[idx]
@@ -868,14 +894,14 @@ func (m Model) selectedLabel(profiles []app.ProfileView, stacks []app.StackView)
 }
 
 func (m Model) renderFilterBar() string {
-	label := filterIdleStyle.Render("Filter /")
+	label := filterIdleStyle.Render(m.currentFilterLabel() + " /")
 	if m.filterMode {
-		label = filterActiveStyle.Render("Filter typing")
+		label = filterActiveStyle.Render(m.t("typing", "输入中"))
 	}
 
-	query := m.filterQuery
+	query := m.visibleFilterQuery()
 	if query == "" {
-		query = "name, label, target, port"
+		query = m.currentFilterPlaceholder(false)
 	}
 
 	return lipgloss.JoinHorizontal(
@@ -887,13 +913,20 @@ func (m Model) renderFilterBar() string {
 }
 
 func (m Model) handleFilterKey(msg tea.KeyMsg) (Model, bool) {
+	query := m.visibleFilterQuery()
+
 	switch msg.String() {
 	case "esc":
-		if m.filterQuery != "" {
-			m.filterQuery = ""
-			m.selectedProfile = 0
-			m.selectedStack = 0
-			m.inspectorScroll = 0
+		if query != "" {
+			if m.activeFilterScope() == filterScopeLogs {
+				m.logFilterQuery = ""
+				m.inspectorScroll = 0
+			} else {
+				m.filterQuery = ""
+				m.selectedProfile = 0
+				m.selectedStack = 0
+				m.inspectorScroll = 0
+			}
 			return m, true
 		}
 		m.filterMode = false
@@ -902,36 +935,30 @@ func (m Model) handleFilterKey(msg tea.KeyMsg) (Model, bool) {
 		m.filterMode = false
 		return m, true
 	case "backspace", "ctrl+h":
-		m.filterQuery = trimLastRune(m.filterQuery)
-		m.selectedProfile = 0
-		m.selectedStack = 0
+		m = m.updateActiveFilterQuery(trimLastRune(query))
 		m.inspectorScroll = 0
 		return m, true
 	case "ctrl+w":
-		m.filterQuery = trimLastWord(m.filterQuery)
-		m.selectedProfile = 0
-		m.selectedStack = 0
+		m = m.updateActiveFilterQuery(trimLastWord(query))
 		m.inspectorScroll = 0
 		return m, true
 	case "ctrl+u":
-		m.filterQuery = ""
-		m.selectedProfile = 0
-		m.selectedStack = 0
+		m = m.updateActiveFilterQuery("")
 		m.inspectorScroll = 0
 		return m, true
 	}
 
+	nextQuery := query
 	switch msg.Type {
 	case tea.KeySpace:
-		m.filterQuery += " "
+		nextQuery += " "
 	case tea.KeyRunes:
-		m.filterQuery += string(msg.Runes)
+		nextQuery += string(msg.Runes)
 	default:
 		return m, false
 	}
 
-	m.selectedProfile = 0
-	m.selectedStack = 0
+	m = m.updateActiveFilterQuery(nextQuery)
 	m.inspectorScroll = 0
 	return m, true
 }
@@ -1585,20 +1612,21 @@ func (m Model) renderHeaderMetaField(label, value string, valueStyle lipgloss.St
 func (m Model) renderHeaderFilterSegment(inputWidth int) string {
 	labelStyle := filterIdleStyle
 	inputStyle := filterInputIdleStyle
-	if m.filterMode || m.filterQuery != "" {
+	query := m.visibleFilterQuery()
+	if m.filterMode || query != "" {
 		labelStyle = filterActiveStyle
 	}
 	if m.filterMode {
 		inputStyle = filterInputActiveStyle
 	}
 
-	value := m.filterQuery
+	value := query
 	valueStyle := sectionTextStyle
 	if value == "" {
 		if m.filterMode {
-			value = m.t("type to filter", "输入以筛选")
+			value = m.currentFilterPlaceholder(true)
 		} else {
-			value = m.t("name, label, target", "名称、标签、目标")
+			value = m.currentFilterPlaceholder(false)
 		}
 		valueStyle = filterPlaceholderStyle
 	}
@@ -1615,10 +1643,69 @@ func (m Model) renderHeaderFilterSegment(inputWidth int) string {
 
 	return lipgloss.JoinHorizontal(
 		lipgloss.Center,
-		labelStyle.Render(m.t("Filter", "筛选")),
+		labelStyle.Render(m.currentFilterLabel()),
 		" ",
 		renderSizedBlock(inputStyle, inputWidth, content),
 	)
+}
+
+func (m Model) defaultFilterScope() filterScope {
+	if m.inspectorTab == inspectorTabLogs {
+		return filterScopeLogs
+	}
+	return filterScopeList
+}
+
+func (m Model) activeFilterScope() filterScope {
+	if m.filterMode {
+		return m.filterScope
+	}
+	return m.defaultFilterScope()
+}
+
+func (m Model) visibleFilterQuery() string {
+	switch m.activeFilterScope() {
+	case filterScopeLogs:
+		return m.logFilterQuery
+	default:
+		return m.filterQuery
+	}
+}
+
+func (m Model) currentFilterLabel() string {
+	switch m.activeFilterScope() {
+	case filterScopeLogs:
+		return m.t("Logs", "日志")
+	default:
+		return m.t("Filter", "筛选")
+	}
+}
+
+func (m Model) currentFilterPlaceholder(editing bool) string {
+	switch m.activeFilterScope() {
+	case filterScopeLogs:
+		if editing {
+			return m.t("type to search logs", "输入以筛选日志")
+		}
+		return m.t("message, source, profile", "消息、来源、profile")
+	default:
+		if editing {
+			return m.t("type to filter", "输入以筛选")
+		}
+		return m.t("name, label, target", "名称、标签、目标")
+	}
+}
+
+func (m Model) updateActiveFilterQuery(query string) Model {
+	switch m.activeFilterScope() {
+	case filterScopeLogs:
+		m.logFilterQuery = query
+	default:
+		m.filterQuery = query
+		m.selectedProfile = 0
+		m.selectedStack = 0
+	}
+	return m
 }
 
 func (m Model) selectedValueStyle(profiles []app.ProfileView, stacks []app.StackView) lipgloss.Style {
@@ -2420,6 +2507,40 @@ func filterStackViews(views []app.StackView, query string) []app.StackView {
 	return filtered
 }
 
+func filterLogEntries(entries []domain.LogEntry, query string) []domain.LogEntry {
+	query = normalizeFilterQuery(query)
+	if query == "" {
+		return entries
+	}
+
+	filtered := make([]domain.LogEntry, 0, len(entries))
+	for _, entry := range entries {
+		if !logEntryMatchesFilter("", entry, query) {
+			continue
+		}
+		filtered = append(filtered, entry)
+	}
+
+	return filtered
+}
+
+func filterStackActivity(entries []stackActivityEntry, query string) []stackActivityEntry {
+	query = normalizeFilterQuery(query)
+	if query == "" {
+		return entries
+	}
+
+	filtered := make([]stackActivityEntry, 0, len(entries))
+	for _, entry := range entries {
+		if !logEntryMatchesFilter(entry.ProfileName, entry.Log, query) {
+			continue
+		}
+		filtered = append(filtered, entry)
+	}
+
+	return filtered
+}
+
 func profileMatchesFilter(view app.ProfileView, query string) bool {
 	return strings.Contains(strings.ToLower(profileSearchText(view)), query)
 }
@@ -2458,6 +2579,30 @@ func stackSearchText(view app.StackView) string {
 			fmt.Sprintf("%d", member.Profile.LocalPort),
 		)
 		parts = append(parts, member.Profile.Labels...)
+	}
+
+	return strings.Join(parts, " ")
+}
+
+func logEntryMatchesFilter(profileName string, entry domain.LogEntry, query string) bool {
+	return strings.Contains(strings.ToLower(logSearchText(profileName, entry)), query)
+}
+
+func logSearchText(profileName string, entry domain.LogEntry) string {
+	parts := []string{
+		profileName,
+		entry.Timestamp.Format("15:04:05"),
+		string(entry.Source),
+		normalizeLogMessage(entry.Message),
+	}
+
+	switch entry.Source {
+	case domain.LogSourceStdout:
+		parts = append(parts, "out", "stdout")
+	case domain.LogSourceStderr:
+		parts = append(parts, "err", "stderr")
+	default:
+		parts = append(parts, "sys", "system")
 	}
 
 	return strings.Join(parts, " ")
