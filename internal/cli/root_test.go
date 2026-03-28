@@ -2,6 +2,7 @@ package cli
 
 import (
 	"bytes"
+	"os"
 	"path/filepath"
 	"strings"
 	"testing"
@@ -537,6 +538,133 @@ func TestStackEditRenamesAndReplacesMembers(t *testing.T) {
 	}
 	if got := strings.Join(edited.Labels, ","); got != "staging" {
 		t.Fatalf("unexpected labels: %q", got)
+	}
+}
+
+func TestProfileImportSSHConfigCreatesDraftProfiles(t *testing.T) {
+	t.Parallel()
+
+	configPath := filepath.Join(t.TempDir(), "config.yaml")
+	if err := storage.SaveConfig(configPath, domain.DefaultConfig()); err != nil {
+		t.Fatalf("save config: %v", err)
+	}
+
+	sshConfigPath := filepath.Join(t.TempDir(), "ssh_config")
+	sshConfig := `
+Host *
+  User shared-user
+
+Host bastion-prod bastion-alt *.ignored
+  HostName bastion.internal
+  User deploy
+  Port 2222
+
+Host jump-dev
+  HostName jump.internal
+`
+	if err := os.WriteFile(sshConfigPath, []byte(strings.TrimSpace(sshConfig)+"\n"), 0o644); err != nil {
+		t.Fatalf("write ssh config: %v", err)
+	}
+
+	output := executeCommand(t,
+		"--config", configPath,
+		"profile", "import", "ssh-config",
+		"--path", sshConfigPath,
+	)
+
+	if !strings.Contains(output, "3 created") {
+		t.Fatalf("unexpected output: %q", output)
+	}
+	for _, name := range []string{"bastion-prod", "bastion-alt", "jump-dev"} {
+		if !strings.Contains(output, name) {
+			t.Fatalf("expected imported name %q in output, got %q", name, output)
+		}
+	}
+
+	cfg, err := storage.LoadConfig(configPath)
+	if err != nil {
+		t.Fatalf("load config: %v", err)
+	}
+
+	if got := len(cfg.Profiles); got != 3 {
+		t.Fatalf("expected 3 imported profiles, got %d", got)
+	}
+
+	imported, exists := findProfile(cfg.Profiles, "bastion-prod")
+	if !exists {
+		t.Fatal("expected imported bastion-prod profile")
+	}
+	if imported.Type != domain.TunnelTypeSSHLocal {
+		t.Fatalf("expected ssh_local type, got %q", imported.Type)
+	}
+	if imported.SSH == nil || imported.SSH.Host != "bastion-prod" {
+		t.Fatalf("unexpected SSH import profile: %#v", imported.SSH)
+	}
+	if imported.SSH.RemoteHost != "127.0.0.1" || imported.SSH.RemotePort != 80 {
+		t.Fatalf("expected placeholder target on imported profile, got %#v", imported.SSH)
+	}
+	if !strings.Contains(imported.Description, "HostName bastion.internal.") {
+		t.Fatalf("expected HostName in description, got %q", imported.Description)
+	}
+	if !strings.Contains(imported.Description, "SSH port 2222.") {
+		t.Fatalf("expected SSH port in description, got %q", imported.Description)
+	}
+	if got := strings.Join(imported.Labels, ","); got != "draft,imported,ssh-config" {
+		t.Fatalf("unexpected labels: %q", got)
+	}
+}
+
+func TestProfileImportSSHConfigSkipsExistingWithoutOverwrite(t *testing.T) {
+	t.Parallel()
+
+	configPath := filepath.Join(t.TempDir(), "config.yaml")
+	cfg := domain.DefaultConfig()
+	cfg.Profiles = []domain.Profile{
+		{
+			Name:      "jump-dev",
+			Type:      domain.TunnelTypeSSHLocal,
+			LocalPort: 15432,
+			SSH: &domain.SSHLocal{
+				Host:       "jump-dev",
+				RemoteHost: "db.internal",
+				RemotePort: 5432,
+			},
+		},
+	}
+	if err := storage.SaveConfig(configPath, cfg); err != nil {
+		t.Fatalf("save config: %v", err)
+	}
+
+	sshConfigPath := filepath.Join(t.TempDir(), "ssh_config")
+	sshConfig := `
+Host jump-dev
+  HostName jump.internal
+`
+	if err := os.WriteFile(sshConfigPath, []byte(strings.TrimSpace(sshConfig)+"\n"), 0o644); err != nil {
+		t.Fatalf("write ssh config: %v", err)
+	}
+
+	output := executeCommand(t,
+		"--config", configPath,
+		"profile", "import", "ssh-config",
+		"--path", sshConfigPath,
+	)
+
+	if !strings.Contains(output, "0 created, 0 updated, 1 skipped") {
+		t.Fatalf("unexpected output: %q", output)
+	}
+
+	persisted, err := storage.LoadConfig(configPath)
+	if err != nil {
+		t.Fatalf("load config: %v", err)
+	}
+
+	existing, exists := findProfile(persisted.Profiles, "jump-dev")
+	if !exists {
+		t.Fatal("expected existing profile to remain")
+	}
+	if existing.SSH == nil || existing.SSH.RemoteHost != "db.internal" || existing.SSH.RemotePort != 5432 {
+		t.Fatalf("expected existing profile to remain unchanged, got %#v", existing.SSH)
 	}
 }
 

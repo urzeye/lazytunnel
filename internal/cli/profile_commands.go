@@ -19,6 +19,7 @@ func newProfileCommand(configPath *string) *cobra.Command {
 	cmd.AddCommand(
 		newProfileListCommand(configPath),
 		newProfileAddCommand(configPath),
+		newProfileImportCommand(configPath),
 		newProfileCloneCommand(configPath),
 		newProfileEditCommand(configPath),
 		newProfileRemoveCommand(configPath),
