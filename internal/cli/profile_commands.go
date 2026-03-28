@@ -19,6 +19,7 @@ func newProfileCommand(configPath *string) *cobra.Command {
 	cmd.AddCommand(
 		newProfileListCommand(configPath),
 		newProfileAddCommand(configPath),
+		newProfileRemoveCommand(configPath),
 	)
 
 	return cmd
@@ -34,6 +35,65 @@ func newProfileAddCommand(configPath *string) *cobra.Command {
 		newProfileAddSSHLocalCommand(configPath),
 		newProfileAddKubernetesCommand(configPath),
 	)
+
+	return cmd
+}
+
+func newProfileRemoveCommand(configPath *string) *cobra.Command {
+	var removeFromStacks bool
+
+	cmd := &cobra.Command{
+		Use:     "remove <name>",
+		Aliases: []string{"rm", "delete", "del"},
+		Short:   "Remove a configured profile",
+		Args:    cobra.ExactArgs(1),
+		RunE: func(cmd *cobra.Command, args []string) error {
+			name := strings.TrimSpace(args[0])
+
+			cfg, err := storage.LoadConfig(*configPath)
+			if err != nil {
+				return fmt.Errorf("load config: %w", err)
+			}
+
+			if !cfg.RemoveProfile(name) {
+				return fmt.Errorf("profile %q not found", name)
+			}
+
+			referencing := cfg.StacksReferencingProfile(name)
+			if len(referencing) > 0 {
+				if !removeFromStacks {
+					return fmt.Errorf(
+						"profile %q is still referenced by stacks: %s; rerun with --remove-from-stacks to prune those references",
+						name,
+						strings.Join(referencing, ", "),
+					)
+				}
+
+				updatedStacks, removedStacks := cfg.RemoveProfileFromStacks(name)
+				if err := storage.SaveConfig(*configPath, cfg); err != nil {
+					return fmt.Errorf("save config: %w", err)
+				}
+
+				_, _ = fmt.Fprintf(
+					cmd.OutOrStdout(),
+					"removed profile %s and pruned %d stack references (%d empty stacks removed)\n",
+					name,
+					updatedStacks,
+					removedStacks,
+				)
+				return nil
+			}
+
+			if err := storage.SaveConfig(*configPath, cfg); err != nil {
+				return fmt.Errorf("save config: %w", err)
+			}
+
+			_, _ = fmt.Fprintf(cmd.OutOrStdout(), "removed profile %s\n", name)
+			return nil
+		},
+	}
+
+	cmd.Flags().BoolVar(&removeFromStacks, "remove-from-stacks", false, "remove the profile from any stacks that still reference it")
 
 	return cmd
 }

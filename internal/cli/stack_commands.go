@@ -18,9 +18,38 @@ func newStackCommand(configPath *string) *cobra.Command {
 	cmd.AddCommand(
 		newStackListCommand(configPath),
 		newStackAddCommand(configPath),
+		newStackRemoveCommand(configPath),
 	)
 
 	return cmd
+}
+
+func newStackRemoveCommand(configPath *string) *cobra.Command {
+	return &cobra.Command{
+		Use:     "remove <name>",
+		Aliases: []string{"rm", "delete", "del"},
+		Short:   "Remove a configured stack",
+		Args:    cobra.ExactArgs(1),
+		RunE: func(cmd *cobra.Command, args []string) error {
+			name := args[0]
+
+			cfg, err := storage.LoadConfig(*configPath)
+			if err != nil {
+				return fmt.Errorf("load config: %w", err)
+			}
+
+			if !cfg.RemoveStack(name) {
+				return fmt.Errorf("stack %q not found", name)
+			}
+
+			if err := storage.SaveConfig(*configPath, cfg); err != nil {
+				return fmt.Errorf("save config: %w", err)
+			}
+
+			_, _ = fmt.Fprintf(cmd.OutOrStdout(), "removed stack %s\n", name)
+			return nil
+		},
+	}
 }
 
 func newStackListCommand(configPath *string) *cobra.Command {

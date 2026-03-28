@@ -153,6 +153,128 @@ func TestVersionCommandShort(t *testing.T) {
 	}
 }
 
+func TestProfileRemoveDeletesExistingProfile(t *testing.T) {
+	t.Parallel()
+
+	configPath := filepath.Join(t.TempDir(), "config.yaml")
+	cfg := domain.DefaultConfig()
+	cfg.Profiles = []domain.Profile{
+		{
+			Name:      "api-debug",
+			Type:      domain.TunnelTypeKubernetesPortForward,
+			LocalPort: 8080,
+			Kubernetes: &domain.Kubernetes{
+				ResourceType: "service",
+				Resource:     "api",
+				RemotePort:   80,
+			},
+		},
+	}
+	if err := storage.SaveConfig(configPath, cfg); err != nil {
+		t.Fatalf("save config: %v", err)
+	}
+
+	output := executeCommand(t,
+		"--config", configPath,
+		"profile", "remove", "api-debug",
+	)
+
+	if !strings.Contains(output, "removed profile api-debug") {
+		t.Fatalf("unexpected output: %q", output)
+	}
+
+	cfg, err := storage.LoadConfig(configPath)
+	if err != nil {
+		t.Fatalf("load config: %v", err)
+	}
+
+	if got := len(cfg.Profiles); got != 0 {
+		t.Fatalf("expected 0 profiles, got %d", got)
+	}
+}
+
+func TestProfileRemoveRejectsReferencedProfileWithoutFlag(t *testing.T) {
+	t.Parallel()
+
+	configPath := filepath.Join(t.TempDir(), "config.yaml")
+	if err := storage.SaveConfig(configPath, storage.SampleConfig()); err != nil {
+		t.Fatalf("save config: %v", err)
+	}
+
+	output, err := executeCommandErr(t,
+		"--config", configPath,
+		"profile", "remove", "prod-db",
+	)
+	if err == nil {
+		t.Fatal("expected remove command to fail")
+	}
+
+	if !strings.Contains(err.Error(), "--remove-from-stacks") {
+		t.Fatalf("expected guidance about --remove-from-stacks, got err=%q output=%q", err, output)
+	}
+}
+
+func TestProfileRemoveCanPruneStackReferences(t *testing.T) {
+	t.Parallel()
+
+	configPath := filepath.Join(t.TempDir(), "config.yaml")
+	if err := storage.SaveConfig(configPath, storage.SampleConfig()); err != nil {
+		t.Fatalf("save config: %v", err)
+	}
+
+	output := executeCommand(t,
+		"--config", configPath,
+		"profile", "remove", "prod-db",
+		"--remove-from-stacks",
+	)
+
+	if !strings.Contains(output, "pruned 1 stack references") {
+		t.Fatalf("unexpected output: %q", output)
+	}
+
+	cfg, err := storage.LoadConfig(configPath)
+	if err != nil {
+		t.Fatalf("load config: %v", err)
+	}
+
+	if got := len(cfg.Profiles); got != 1 {
+		t.Fatalf("expected 1 profile, got %d", got)
+	}
+	if got := len(cfg.Stacks); got != 1 {
+		t.Fatalf("expected 1 stack, got %d", got)
+	}
+	if want := "api-debug"; cfg.Stacks[0].Profiles[0] != want {
+		t.Fatalf("expected remaining stack member %q, got %q", want, cfg.Stacks[0].Profiles[0])
+	}
+}
+
+func TestStackRemoveDeletesExistingStack(t *testing.T) {
+	t.Parallel()
+
+	configPath := filepath.Join(t.TempDir(), "config.yaml")
+	if err := storage.SaveConfig(configPath, storage.SampleConfig()); err != nil {
+		t.Fatalf("save config: %v", err)
+	}
+
+	output := executeCommand(t,
+		"--config", configPath,
+		"stack", "remove", "backend-dev",
+	)
+
+	if !strings.Contains(output, "removed stack backend-dev") {
+		t.Fatalf("unexpected output: %q", output)
+	}
+
+	cfg, err := storage.LoadConfig(configPath)
+	if err != nil {
+		t.Fatalf("load config: %v", err)
+	}
+
+	if got := len(cfg.Stacks); got != 0 {
+		t.Fatalf("expected 0 stacks, got %d", got)
+	}
+}
+
 func executeCommand(t *testing.T, args ...string) string {
 	t.Helper()
 
@@ -167,4 +289,16 @@ func executeCommand(t *testing.T, args ...string) string {
 	}
 
 	return stdout.String()
+}
+
+func executeCommandErr(t *testing.T, args ...string) (string, error) {
+	t.Helper()
+
+	cmd := NewRootCommand()
+	var stdout bytes.Buffer
+	cmd.SetOut(&stdout)
+	cmd.SetErr(&stdout)
+	cmd.SetArgs(args)
+
+	return stdout.String(), cmd.Execute()
 }

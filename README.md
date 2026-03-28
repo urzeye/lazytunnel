@@ -111,7 +111,9 @@ LazyTunnel is designed around a few strong workflows:
 - start, stop, and restart tunnels with one key
 - monitor status, uptime, ports, and recent errors in one place
 - group multiple tunnels into a stack and start them together
+- filter profiles and stacks by name, label, target, and port
 - detect local port conflicts before startup
+- manage config from the CLI with add and remove commands
 
 ## Supported Workflows
 

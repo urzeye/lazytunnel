@@ -111,3 +111,92 @@ func TestFormatLastExit(t *testing.T) {
 		t.Fatalf("formatLastExit() = %q, want %q", got, want)
 	}
 }
+
+func TestFilterProfileViewsMatchesLabelsAndTargets(t *testing.T) {
+	t.Parallel()
+
+	views := []app.ProfileView{
+		{
+			Profile: domain.Profile{
+				Name:      "prod-db",
+				Type:      domain.TunnelTypeSSHLocal,
+				LocalPort: 5432,
+				Labels:    []string{"prod", "db"},
+				SSH: &domain.SSHLocal{
+					Host:       "bastion-prod",
+					RemoteHost: "db.internal",
+					RemotePort: 5432,
+				},
+			},
+		},
+		{
+			Profile: domain.Profile{
+				Name:      "api-debug",
+				Type:      domain.TunnelTypeKubernetesPortForward,
+				LocalPort: 8080,
+				Labels:    []string{"dev", "api"},
+				Kubernetes: &domain.Kubernetes{
+					Context:      "dev-cluster",
+					Namespace:    "backend",
+					ResourceType: "service",
+					Resource:     "api",
+					RemotePort:   80,
+				},
+			},
+		},
+	}
+
+	if got := filterProfileViews(views, "prod"); len(got) != 1 || got[0].Profile.Name != "prod-db" {
+		t.Fatalf("expected prod filter to match prod-db, got %#v", got)
+	}
+
+	if got := filterProfileViews(views, "service/api"); len(got) != 1 || got[0].Profile.Name != "api-debug" {
+		t.Fatalf("expected target filter to match api-debug, got %#v", got)
+	}
+}
+
+func TestFilterStackViewsMatchesMembersAndLabels(t *testing.T) {
+	t.Parallel()
+
+	views := []app.StackView{
+		{
+			Stack: domain.Stack{
+				Name:   "backend-dev",
+				Labels: []string{"daily"},
+			},
+			Members: []app.ProfileView{
+				{Profile: domain.Profile{Name: "prod-db"}},
+				{Profile: domain.Profile{Name: "api-debug"}},
+			},
+		},
+		{
+			Stack: domain.Stack{
+				Name:   "ops",
+				Labels: []string{"infra"},
+			},
+			Members: []app.ProfileView{
+				{Profile: domain.Profile{Name: "grafana"}},
+			},
+		},
+	}
+
+	if got := filterStackViews(views, "api-debug"); len(got) != 1 || got[0].Stack.Name != "backend-dev" {
+		t.Fatalf("expected member filter to match backend-dev, got %#v", got)
+	}
+
+	if got := filterStackViews(views, "infra"); len(got) != 1 || got[0].Stack.Name != "ops" {
+		t.Fatalf("expected label filter to match ops, got %#v", got)
+	}
+}
+
+func TestTrimLastWord(t *testing.T) {
+	t.Parallel()
+
+	if got := trimLastWord("prod db"); got != "prod" {
+		t.Fatalf("trimLastWord() = %q, want %q", got, "prod")
+	}
+
+	if got := trimLastWord("single"); got != "" {
+		t.Fatalf("trimLastWord() = %q, want empty string", got)
+	}
+}

@@ -95,6 +95,80 @@ func (c *Config) SetStack(stack Stack) (created bool) {
 	return true
 }
 
+func (c *Config) RemoveProfile(name string) bool {
+	for idx := range c.Profiles {
+		if c.Profiles[idx].Name != name {
+			continue
+		}
+
+		c.Profiles = append(c.Profiles[:idx], c.Profiles[idx+1:]...)
+		return true
+	}
+
+	return false
+}
+
+func (c *Config) RemoveStack(name string) bool {
+	for idx := range c.Stacks {
+		if c.Stacks[idx].Name != name {
+			continue
+		}
+
+		c.Stacks = append(c.Stacks[:idx], c.Stacks[idx+1:]...)
+		return true
+	}
+
+	return false
+}
+
+func (c *Config) StacksReferencingProfile(name string) []string {
+	names := make([]string, 0)
+	for _, stack := range c.Stacks {
+		for _, profileName := range stack.Profiles {
+			if profileName != name {
+				continue
+			}
+
+			names = append(names, stack.Name)
+			break
+		}
+	}
+
+	return names
+}
+
+func (c *Config) RemoveProfileFromStacks(name string) (updatedStacks, removedStacks int) {
+	filtered := c.Stacks[:0]
+	for _, stack := range c.Stacks {
+		profiles := stack.Profiles[:0]
+		removed := false
+		for _, profileName := range stack.Profiles {
+			if profileName == name {
+				removed = true
+				continue
+			}
+			profiles = append(profiles, profileName)
+		}
+
+		if removed {
+			updatedStacks++
+		}
+
+		stack.Profiles = profiles
+		if len(stack.Profiles) == 0 {
+			if removed {
+				removedStacks++
+			}
+			continue
+		}
+
+		filtered = append(filtered, stack)
+	}
+
+	c.Stacks = filtered
+	return updatedStacks, removedStacks
+}
+
 func (c *Config) Normalize() {
 	if c.Version == 0 {
 		c.Version = CurrentConfigVersion

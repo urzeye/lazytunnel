@@ -178,3 +178,67 @@ func TestConfigSetStackAppendsNewStack(t *testing.T) {
 		t.Fatalf("expected 1 stack, got %d", got)
 	}
 }
+
+func TestConfigRemoveProfileDeletesExistingProfile(t *testing.T) {
+	t.Parallel()
+
+	cfg := DefaultConfig()
+	cfg.Profiles = []Profile{
+		{Name: "prod-db"},
+		{Name: "api-debug"},
+	}
+
+	if removed := cfg.RemoveProfile("prod-db"); !removed {
+		t.Fatal("expected profile to be removed")
+	}
+
+	if got := len(cfg.Profiles); got != 1 {
+		t.Fatalf("expected 1 profile, got %d", got)
+	}
+
+	if cfg.Profiles[0].Name != "api-debug" {
+		t.Fatalf("expected remaining profile to be api-debug, got %q", cfg.Profiles[0].Name)
+	}
+}
+
+func TestConfigRemoveProfileFromStacksPrunesEmptyStacks(t *testing.T) {
+	t.Parallel()
+
+	cfg := DefaultConfig()
+	cfg.Stacks = []Stack{
+		{Name: "backend", Profiles: []string{"prod-db", "api-debug"}},
+		{Name: "solo", Profiles: []string{"prod-db"}},
+	}
+
+	updated, removed := cfg.RemoveProfileFromStacks("prod-db")
+	if updated != 2 {
+		t.Fatalf("expected 2 updated stacks, got %d", updated)
+	}
+	if removed != 1 {
+		t.Fatalf("expected 1 removed stack, got %d", removed)
+	}
+
+	if got := len(cfg.Stacks); got != 1 {
+		t.Fatalf("expected 1 remaining stack, got %d", got)
+	}
+
+	if want := []string{"api-debug"}; strings.Join(cfg.Stacks[0].Profiles, ",") != strings.Join(want, ",") {
+		t.Fatalf("expected backend stack to keep %v, got %v", want, cfg.Stacks[0].Profiles)
+	}
+}
+
+func TestConfigStacksReferencingProfileListsMatches(t *testing.T) {
+	t.Parallel()
+
+	cfg := DefaultConfig()
+	cfg.Stacks = []Stack{
+		{Name: "backend", Profiles: []string{"prod-db", "api-debug"}},
+		{Name: "ops", Profiles: []string{"prod-db"}},
+	}
+
+	got := cfg.StacksReferencingProfile("prod-db")
+	want := []string{"backend", "ops"}
+	if strings.Join(got, ",") != strings.Join(want, ",") {
+		t.Fatalf("expected %v, got %v", want, got)
+	}
+}

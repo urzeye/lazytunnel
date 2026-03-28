@@ -72,6 +72,15 @@ var (
 				Foreground(lipgloss.Color("230")).
 				Background(lipgloss.Color("124")).
 				Padding(0, 1)
+	filterIdleStyle = lipgloss.NewStyle().
+			Foreground(lipgloss.Color("250")).
+			Background(lipgloss.Color("238")).
+			Padding(0, 1)
+	filterActiveStyle = lipgloss.NewStyle().
+				Bold(true).
+				Foreground(lipgloss.Color("230")).
+				Background(lipgloss.Color("62")).
+				Padding(0, 1)
 	hintStyle = lipgloss.NewStyle().
 			Foreground(lipgloss.Color("246"))
 )
@@ -104,6 +113,8 @@ type Model struct {
 	width           int
 	height          int
 	now             time.Time
+	filterQuery     string
+	filterMode      bool
 	lastError       string
 }
 
@@ -137,14 +148,32 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		return m, waitForRuntimeEvent(m.events)
 
 	case tea.KeyMsg:
-		profiles := m.service.ProfileViews()
-		stacks := m.service.StackViews()
+		profiles := filterProfileViews(m.service.ProfileViews(), m.filterQuery)
+		stacks := filterStackViews(m.service.StackViews(), m.filterQuery)
 		m = m.normalizeSelection(len(profiles), len(stacks))
+
+		if m.filterMode {
+			var handled bool
+			m, handled = m.handleFilterKey(msg)
+			if handled {
+				return m, nil
+			}
+		}
 
 		switch msg.String() {
 		case "q", "ctrl+c":
 			m.service.Unsubscribe(m.subscriptionID)
 			return m, tea.Quit
+		case "/":
+			m.filterMode = true
+			return m, nil
+		case "esc":
+			if m.filterQuery != "" {
+				m.filterQuery = ""
+				m.selectedProfile = 0
+				m.selectedStack = 0
+				return m, nil
+			}
 		case "tab":
 			if len(stacks) > 0 {
 				if m.focus == focusProfiles {
@@ -197,12 +226,14 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 }
 
 func (m Model) View() string {
-	profiles := m.service.ProfileViews()
-	stacks := m.service.StackViews()
+	allProfiles := m.service.ProfileViews()
+	allStacks := m.service.StackViews()
+	profiles := filterProfileViews(allProfiles, m.filterQuery)
+	stacks := filterStackViews(allStacks, m.filterQuery)
 	m = m.normalizeSelection(len(profiles), len(stacks))
 
 	sections := []string{
-		m.renderHeader(profiles, stacks),
+		m.renderHeader(profiles, stacks, len(allProfiles), len(allStacks)),
 		m.renderMain(profiles, stacks),
 	}
 
@@ -211,23 +242,24 @@ func (m Model) View() string {
 	}
 
 	sections = append(sections, hintStyle.Render(
-		"Tab or 1/2 to switch lists, j/k or arrows to move, Enter or s to start or stop the selection, q to quit.",
+		"/ to filter, Esc to clear, Tab or 1/2 to switch lists, j/k or arrows to move, Enter or s to start or stop the selection, q to quit.",
 	))
 
 	return appStyle.Width(m.contentWidth()).Render(strings.Join(sections, "\n"))
 }
 
-func (m Model) renderHeader(profiles []app.ProfileView, stacks []app.StackView) string {
+func (m Model) renderHeader(profiles []app.ProfileView, stacks []app.StackView, totalProfiles, totalStacks int) string {
 	titleBlock := lipgloss.JoinVertical(
 		lipgloss.Left,
 		titleStyle.Render("LazyTunnel"),
 		subtitleStyle.Render("Keyboard-first tunnel workspace for SSH and Kubernetes forwards."),
+		m.renderFilterBar(),
 	)
 
 	stats := []string{
 		renderKeyValueLine("Config", m.configPath, 42),
-		renderKeyValueLine("Profiles", fmt.Sprintf("%d", len(profiles)), 42),
-		renderKeyValueLine("Stacks", fmt.Sprintf("%d", len(stacks)), 42),
+		renderKeyValueLine("Profiles", formatVisibleCount(len(profiles), totalProfiles), 42),
+		renderKeyValueLine("Stacks", formatVisibleCount(len(stacks), totalStacks), 42),
 		renderKeyValueLine("Active", fmt.Sprintf("%d", countActiveProfiles(profiles)), 42),
 		renderKeyValueLine("Selected", m.selectedLabel(profiles, stacks), 42),
 	}
@@ -275,15 +307,26 @@ func (m Model) renderMain(profiles []app.ProfileView, stacks []app.StackView) st
 }
 
 func (m Model) renderProfilesPanel(views []app.ProfileView, width int) string {
-	return renderPanel("Profiles", m.renderProfiles(views, width-4), width, m.focus == focusProfiles)
+	title := "Profiles"
+	if m.filterQuery != "" {
+		title = fmt.Sprintf("Profiles (%d matches)", len(views))
+	}
+	return renderPanel(title, m.renderProfiles(views, width-4), width, m.focus == focusProfiles)
 }
 
 func (m Model) renderStacksPanel(views []app.StackView, width int) string {
-	return renderPanel("Stacks", m.renderStacks(views, width-4), width, m.focus == focusStacks)
+	title := "Stacks"
+	if m.filterQuery != "" {
+		title = fmt.Sprintf("Stacks (%d matches)", len(views))
+	}
+	return renderPanel(title, m.renderStacks(views, width-4), width, m.focus == focusStacks)
 }
 
 func (m Model) renderProfiles(views []app.ProfileView, width int) string {
 	if len(views) == 0 {
+		if m.filterQuery != "" {
+			return mutedStyle.Render(fmt.Sprintf("No profiles match %q. Press Esc to clear the filter.", m.filterQuery))
+		}
 		return mutedStyle.Render("No profiles yet. Run `lazytunnel init --sample` to start from the example config.")
 	}
 
@@ -326,6 +369,9 @@ func (m Model) renderProfileRow(view app.ProfileView, selected bool, focused boo
 
 func (m Model) renderStacks(views []app.StackView, width int) string {
 	if len(views) == 0 {
+		if m.filterQuery != "" {
+			return mutedStyle.Render(fmt.Sprintf("No stacks match %q. Press Esc to clear the filter.", m.filterQuery))
+		}
 		return mutedStyle.Render("No stacks yet. Add stacks to your config to launch groups of tunnels together.")
 	}
 
@@ -372,6 +418,9 @@ func (m Model) renderSelectionDetailsPanel(profiles []app.ProfileView, stacks []
 	}
 
 	if len(profiles) == 0 {
+		if m.filterQuery != "" {
+			return renderPanel("Profile Details", mutedStyle.Render("No profile matches the current filter."), width, false)
+		}
 		return renderPanel("Profile Details", mutedStyle.Render("No profile selected."), width, false)
 	}
 
@@ -384,6 +433,9 @@ func (m Model) renderSelectionLogsPanel(profiles []app.ProfileView, stacks []app
 	}
 
 	if len(profiles) == 0 {
+		if m.filterQuery != "" {
+			return renderPanel("Recent Logs", mutedStyle.Render("No filtered profile selected, so there are no logs to show."), width, false)
+		}
 		return renderPanel("Recent Logs", mutedStyle.Render("Start a tunnel to see runtime output here."), width, false)
 	}
 
@@ -544,6 +596,70 @@ func (m Model) selectedLabel(profiles []app.ProfileView, stacks []app.StackView)
 		return "profile/" + profiles[m.selectedProfile].Profile.Name
 	}
 	return "none"
+}
+
+func (m Model) renderFilterBar() string {
+	label := filterIdleStyle.Render("Filter /")
+	if m.filterMode {
+		label = filterActiveStyle.Render("Filter typing")
+	}
+
+	query := m.filterQuery
+	if query == "" {
+		query = "name, label, target, port"
+	}
+
+	return lipgloss.JoinHorizontal(
+		lipgloss.Center,
+		label,
+		"  ",
+		sectionTextStyle.Render(query),
+	)
+}
+
+func (m Model) handleFilterKey(msg tea.KeyMsg) (Model, bool) {
+	switch msg.String() {
+	case "esc":
+		if m.filterQuery != "" {
+			m.filterQuery = ""
+			m.selectedProfile = 0
+			m.selectedStack = 0
+			return m, true
+		}
+		m.filterMode = false
+		return m, true
+	case "enter":
+		m.filterMode = false
+		return m, true
+	case "backspace", "ctrl+h":
+		m.filterQuery = trimLastRune(m.filterQuery)
+		m.selectedProfile = 0
+		m.selectedStack = 0
+		return m, true
+	case "ctrl+w":
+		m.filterQuery = trimLastWord(m.filterQuery)
+		m.selectedProfile = 0
+		m.selectedStack = 0
+		return m, true
+	case "ctrl+u":
+		m.filterQuery = ""
+		m.selectedProfile = 0
+		m.selectedStack = 0
+		return m, true
+	}
+
+	switch msg.Type {
+	case tea.KeySpace:
+		m.filterQuery += " "
+	case tea.KeyRunes:
+		m.filterQuery += string(msg.Runes)
+	default:
+		return m, false
+	}
+
+	m.selectedProfile = 0
+	m.selectedStack = 0
+	return m, true
 }
 
 func (m Model) contentWidth() int {
@@ -891,6 +1007,116 @@ func humanizeDuration(duration time.Duration) string {
 	days := int(duration / (24 * time.Hour))
 	hours := int(duration.Hours()) % 24
 	return fmt.Sprintf("%dd%02dh", days, hours)
+}
+
+func filterProfileViews(views []app.ProfileView, query string) []app.ProfileView {
+	query = normalizeFilterQuery(query)
+	if query == "" {
+		return views
+	}
+
+	filtered := make([]app.ProfileView, 0, len(views))
+	for _, view := range views {
+		if !profileMatchesFilter(view, query) {
+			continue
+		}
+		filtered = append(filtered, view)
+	}
+
+	return filtered
+}
+
+func filterStackViews(views []app.StackView, query string) []app.StackView {
+	query = normalizeFilterQuery(query)
+	if query == "" {
+		return views
+	}
+
+	filtered := make([]app.StackView, 0, len(views))
+	for _, view := range views {
+		if !stackMatchesFilter(view, query) {
+			continue
+		}
+		filtered = append(filtered, view)
+	}
+
+	return filtered
+}
+
+func profileMatchesFilter(view app.ProfileView, query string) bool {
+	return strings.Contains(strings.ToLower(profileSearchText(view)), query)
+}
+
+func stackMatchesFilter(view app.StackView, query string) bool {
+	return strings.Contains(strings.ToLower(stackSearchText(view)), query)
+}
+
+func profileSearchText(view app.ProfileView) string {
+	parts := []string{
+		view.Profile.Name,
+		view.Profile.Description,
+		string(view.Profile.Type),
+		humanTunnelType(view.Profile.Type),
+		profileTarget(view.Profile),
+		fmt.Sprintf("%d", view.Profile.LocalPort),
+	}
+	parts = append(parts, view.Profile.Labels...)
+	return strings.Join(parts, " ")
+}
+
+func stackSearchText(view app.StackView) string {
+	parts := []string{
+		view.Stack.Name,
+		view.Stack.Description,
+		string(view.Status),
+		humanStackStatus(view.Status),
+	}
+	parts = append(parts, view.Stack.Labels...)
+
+	for _, member := range view.Members {
+		parts = append(parts,
+			member.Profile.Name,
+			member.Profile.Description,
+			profileTarget(member.Profile),
+			fmt.Sprintf("%d", member.Profile.LocalPort),
+		)
+		parts = append(parts, member.Profile.Labels...)
+	}
+
+	return strings.Join(parts, " ")
+}
+
+func normalizeFilterQuery(query string) string {
+	return strings.ToLower(strings.TrimSpace(query))
+}
+
+func formatVisibleCount(visible, total int) string {
+	if visible == total {
+		return fmt.Sprintf("%d", total)
+	}
+	return fmt.Sprintf("%d/%d", visible, total)
+}
+
+func trimLastRune(value string) string {
+	runes := []rune(value)
+	if len(runes) == 0 {
+		return ""
+	}
+	return string(runes[:len(runes)-1])
+}
+
+func trimLastWord(value string) string {
+	value = strings.TrimRight(value, " ")
+	if value == "" {
+		return ""
+	}
+
+	idx := strings.LastIndexByte(value, ' ')
+	if idx == -1 {
+		return ""
+	}
+
+	return strings.TrimRight(value[:idx], " ")
 }
 
 type stackActivityEntry struct {
