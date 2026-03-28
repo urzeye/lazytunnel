@@ -6,6 +6,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/charmbracelet/lipgloss"
 	"github.com/urzeye/lazytunnel/internal/app"
 	"github.com/urzeye/lazytunnel/internal/domain"
 	ltruntime "github.com/urzeye/lazytunnel/internal/runtime"
@@ -142,6 +143,74 @@ func TestRenderStackDetailLinesShowsMissingProfiles(t *testing.T) {
 	}
 	if !strings.Contains(rendered, "missing-api") {
 		t.Fatalf("expected missing profile name, got %q", rendered)
+	}
+}
+
+func TestRenderQuickActionRowsUsesTwoColumnsWhenWide(t *testing.T) {
+	t.Parallel()
+
+	rows := renderQuickActionRows(48, []quickAction{
+		{key: "i", label: "sample config"},
+		{key: "a", label: "draft profile"},
+		{key: "e", label: "edit config"},
+		{key: "r", label: "reload config"},
+	})
+
+	if len(rows) != 2 {
+		t.Fatalf("expected 2 rows, got %d", len(rows))
+	}
+	for _, row := range rows {
+		if got := lipgloss.Width(row); got != 48 {
+			t.Fatalf("expected row width 48, got %d (%q)", got, row)
+		}
+	}
+
+	rendered := strings.Join(rows, "\n")
+	for _, snippet := range []string{"sample config", "draft profile", "edit config", "reload config"} {
+		if !strings.Contains(rendered, snippet) {
+			t.Fatalf("expected %q in quick action rows, got %q", snippet, rendered)
+		}
+	}
+}
+
+func TestRenderQuickActionRowsFallsBackToSingleColumnWhenNarrow(t *testing.T) {
+	t.Parallel()
+
+	rows := renderQuickActionRows(24, []quickAction{
+		{key: "A", label: "draft stack"},
+		{key: "e", label: "edit config"},
+		{key: "r", label: "reload config"},
+		{key: "Tab", label: "focus profiles"},
+	})
+
+	if len(rows) != 4 {
+		t.Fatalf("expected 4 rows, got %d", len(rows))
+	}
+	for _, row := range rows {
+		if got := lipgloss.Width(row); got != 24 {
+			t.Fatalf("expected row width 24, got %d (%q)", got, row)
+		}
+	}
+
+	rendered := strings.Join(rows, "\n")
+	for _, snippet := range []string{"draft stack", "edit config", "reload config", "focus profiles"} {
+		if !strings.Contains(rendered, snippet) {
+			t.Fatalf("expected %q in quick action rows, got %q", snippet, rendered)
+		}
+	}
+}
+
+func TestRenderEmptyProfilesLinesIncludesAllActions(t *testing.T) {
+	t.Parallel()
+
+	model := Model{}
+	lines := model.renderEmptyProfilesLines(48)
+	rendered := strings.Join(lines, "\n")
+
+	for _, snippet := range []string{"sample config", "draft profile", "edit config", "reload config"} {
+		if !strings.Contains(rendered, snippet) {
+			t.Fatalf("expected %q in empty profiles lines, got %q", snippet, rendered)
+		}
 	}
 }
 

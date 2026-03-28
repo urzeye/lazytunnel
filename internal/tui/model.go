@@ -1584,19 +1584,23 @@ func (m Model) selectedValueStyle(profiles []app.ProfileView, stacks []app.Stack
 }
 
 func (m Model) renderEmptyProfilesLines(width int) []string {
-	return []string{
-		composeStyledLine(renderActionChip("i", "sample")+"  ", renderActionChip("a", "draft profile"), width),
-		composeStyledLine(renderActionChip("e", "edit config")+"  ", renderActionChip("r", "reload"), width),
-		mutedStyle.Render(truncateText("No profiles yet. Start here.", width)),
-	}
+	rows := renderQuickActionRows(width, []quickAction{
+		{key: "i", label: "sample config"},
+		{key: "a", label: "draft profile"},
+		{key: "e", label: "edit config"},
+		{key: "r", label: "reload config"},
+	})
+	return append(rows, mutedStyle.Render(truncateText("No profiles yet. Start here.", width)))
 }
 
 func (m Model) renderEmptyStacksLines(width int) []string {
-	return []string{
-		composeStyledLine(renderActionChip("A", "draft stack")+"  ", renderActionChip("e", "edit config"), width),
-		composeStyledLine(renderActionChip("r", "reload")+"  ", renderActionChip("Tab", "focus profiles"), width),
-		mutedStyle.Render(truncateText("No stacks yet. Create one from the selected profile.", width)),
-	}
+	rows := renderQuickActionRows(width, []quickAction{
+		{key: "A", label: "draft stack"},
+		{key: "e", label: "edit config"},
+		{key: "r", label: "reload config"},
+		{key: "Tab", label: "focus profiles"},
+	})
+	return append(rows, mutedStyle.Render(truncateText("No stacks yet. Create one from the selected profile.", width)))
 }
 
 func (m Model) renderEmptyInspectorLines(width int) []string {
@@ -1625,6 +1629,75 @@ func renderActionChip(key, label string) string {
 		" ",
 		sectionTextStyle.Render(label),
 	)
+}
+
+type quickAction struct {
+	key   string
+	label string
+}
+
+func renderQuickActionRows(width int, actions []quickAction) []string {
+	if len(actions) == 0 || width <= 0 {
+		return nil
+	}
+
+	if width < 40 {
+		return renderQuickActionList(width, actions)
+	}
+
+	const gapWidth = 2
+	leftWidth := max(1, (width-gapWidth)/2)
+	rightWidth := max(1, width-gapWidth-leftWidth)
+	keyWidth := quickActionKeyWidth(actions)
+
+	minCellWidth := keyWidth + 8
+	if leftWidth < minCellWidth || rightWidth < minCellWidth {
+		return renderQuickActionList(width, actions)
+	}
+
+	rows := make([]string, 0, (len(actions)+1)/2)
+	for idx := 0; idx < len(actions); idx += 2 {
+		left := renderQuickActionCell(actions[idx], leftWidth, keyWidth)
+		if idx+1 >= len(actions) {
+			rows = append(rows, left)
+			continue
+		}
+
+		right := renderQuickActionCell(actions[idx+1], rightWidth, keyWidth)
+		rows = append(rows, lipgloss.JoinHorizontal(lipgloss.Top, left, strings.Repeat(" ", gapWidth), right))
+	}
+
+	return rows
+}
+
+func renderQuickActionList(width int, actions []quickAction) []string {
+	keyWidth := quickActionKeyWidth(actions)
+	rows := make([]string, 0, len(actions))
+	for _, action := range actions {
+		rows = append(rows, renderQuickActionCell(action, width, keyWidth))
+	}
+	return rows
+}
+
+func quickActionKeyWidth(actions []quickAction) int {
+	width := 0
+	for _, action := range actions {
+		chipWidth := lipgloss.Width(codeStyle.Render(" " + action.key + " "))
+		width = max(width, chipWidth)
+	}
+	return width
+}
+
+func renderQuickActionCell(action quickAction, width, keyWidth int) string {
+	key := renderSizedBlock(lipgloss.NewStyle(), keyWidth, codeStyle.Render(" "+action.key+" "))
+	remaining := max(1, width-keyWidth-1)
+	content := lipgloss.JoinHorizontal(
+		lipgloss.Top,
+		key,
+		" ",
+		sectionTextStyle.Render(truncateText(action.label, remaining)),
+	)
+	return lipgloss.NewStyle().Width(width).Render(content)
 }
 
 func (m Model) renderProfileStartLines(view app.ProfileView, specErr error, width int) []string {
