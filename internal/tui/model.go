@@ -443,11 +443,11 @@ func (m Model) hintMessage() string {
 	case profileCount == 0:
 		return "a draft profile  e edit config  r reload  / filter  q quit"
 	case stackCount == 0:
-		return "A draft stack  a draft profile  e edit config  r reload  / filter  q quit"
+		return "c clone profile  A draft stack  a draft profile  e edit config  r reload  / filter  q quit"
 	case m.focus == focusStacks:
-		return "Tab switch  Enter toggle stack  A draft stack  d delete  h/l tabs  / filter  q quit"
+		return "Tab switch  Enter toggle stack  c clone stack  A draft stack  d delete  e edit config  / filter  q quit"
 	default:
-		return "Tab switch  Enter toggle  a draft profile  A draft stack  d delete  h/l tabs  / filter  q quit"
+		return "Tab switch  Enter toggle  c clone profile  A draft stack  d delete  e edit config  / filter  q quit"
 	}
 }
 
@@ -698,6 +698,9 @@ func (m Model) renderProfileDetailLines(view app.ProfileView, width int) []strin
 		lines = append(lines, renderCompactKeyValue("Error", view.State.LastError, width))
 	}
 
+	lines = append(lines, groupTitleStyle.Render("Actions"))
+	lines = append(lines, profileActionLines(view, width)...)
+
 	return lines
 }
 
@@ -743,6 +746,9 @@ func (m Model) renderStackDetailLines(view app.StackView, width int) []string {
 		lines = append(lines, groupTitleStyle.Render("Action"))
 		lines = append(lines, mutedStyle.Render(truncateText("Press Enter to start the missing members and restore the stack.", width)))
 	}
+
+	lines = append(lines, groupTitleStyle.Render("Actions"))
+	lines = append(lines, stackActionLines(view, width)...)
 
 	return lines
 }
@@ -903,6 +909,9 @@ func (m Model) handleWorkspaceKey(msg tea.KeyMsg, profiles []app.ProfileView, st
 	case "a":
 		m = m.createStarterProfileDraft()
 		return m, nil, true
+	case "c":
+		m = m.cloneSelection(profiles, stacks)
+		return m, nil, true
 	case "A":
 		m = m.createStarterStackDraft(profiles, stacks)
 		return m, nil, true
@@ -990,6 +999,75 @@ func (m Model) createStarterStackDraft(profiles []app.ProfileView, stacks []app.
 	m.inspectorScroll = 0
 	m.selectStackByName(stack.Name)
 	m.lastNotice = fmt.Sprintf("Created starter stack %s. Press e to refine the config.", stack.Name)
+	return m
+}
+
+func (m Model) cloneSelection(profiles []app.ProfileView, stacks []app.StackView) Model {
+	m.lastError = ""
+	m.lastNotice = ""
+
+	if m.focus == focusStacks && len(stacks) > 0 {
+		return m.cloneSelectedStack(stacks)
+	}
+	if len(profiles) > 0 {
+		return m.cloneSelectedProfile(profiles)
+	}
+	if m.filterQuery != "" {
+		m.lastError = "No visible item to clone. Clear the filter or select a different item."
+		return m
+	}
+	m.lastError = "Nothing is selected to clone yet."
+	return m
+}
+
+func (m Model) cloneSelectedProfile(profiles []app.ProfileView) Model {
+	selected := profiles[max(0, min(m.selectedProfile, len(profiles)-1))]
+	cfg := m.service.Config()
+	profile := cloneProfileDefinition(selected.Profile)
+	profile.Name = nextCopyName(profileNames(cfg), selected.Profile.Name)
+	profile.LocalPort = nextAvailableLocalPort(cfg, selected.Profile.LocalPort+1)
+	profile.Labels = appendUniqueLabel(profile.Labels, "draft")
+
+	cfg.SetProfile(profile)
+	if err := storage.SaveConfig(m.configPath, cfg); err != nil {
+		m.lastError = "Clone profile: " + err.Error()
+		return m
+	}
+
+	m.service.ReplaceConfig(cfg)
+	m.filterQuery = ""
+	m.filterMode = false
+	m.focus = focusProfiles
+	m.selectedStack = 0
+	m.inspectorTab = inspectorTabDetails
+	m.inspectorScroll = 0
+	m.selectProfileByName(profile.Name)
+	m.lastNotice = fmt.Sprintf("Cloned profile %s to %s.", selected.Profile.Name, profile.Name)
+	return m
+}
+
+func (m Model) cloneSelectedStack(stacks []app.StackView) Model {
+	selected := stacks[max(0, min(m.selectedStack, len(stacks)-1))]
+	cfg := m.service.Config()
+	stack := cloneStackDefinition(selected.Stack)
+	stack.Name = nextCopyName(stackNames(cfg), selected.Stack.Name)
+	stack.Labels = appendUniqueLabel(stack.Labels, "draft")
+
+	cfg.SetStack(stack)
+	if err := storage.SaveConfig(m.configPath, cfg); err != nil {
+		m.lastError = "Clone stack: " + err.Error()
+		return m
+	}
+
+	m.service.ReplaceConfig(cfg)
+	m.filterQuery = ""
+	m.filterMode = false
+	m.focus = focusStacks
+	m.selectedProfile = 0
+	m.inspectorTab = inspectorTabDetails
+	m.inspectorScroll = 0
+	m.selectStackByName(stack.Name)
+	m.lastNotice = fmt.Sprintf("Cloned stack %s to %s.", selected.Stack.Name, stack.Name)
 	return m
 }
 
@@ -1521,6 +1599,36 @@ func renderActionChip(key, label string) string {
 	)
 }
 
+func profileActionLines(view app.ProfileView, width int) []string {
+	toggleLabel := "start tunnel"
+	if isActiveTunnelStatus(view.State.Status) {
+		toggleLabel = "stop tunnel"
+	}
+
+	return []string{
+		renderActionLine("Enter", toggleLabel, width),
+		renderActionLine("c", "clone profile draft", width),
+		renderActionLine("A", "create stack draft from profile", width),
+		renderActionLine("e", "edit config file", width),
+		renderActionLine("d", "delete profile", width),
+	}
+}
+
+func stackActionLines(view app.StackView, width int) []string {
+	toggleLabel := "start stack"
+	if view.Status == app.StackStatusRunning {
+		toggleLabel = "stop stack"
+	}
+
+	return []string{
+		renderActionLine("Enter", toggleLabel, width),
+		renderActionLine("c", "clone stack draft", width),
+		renderActionLine("A", "create another stack draft", width),
+		renderActionLine("e", "edit config file", width),
+		renderActionLine("d", "delete stack", width),
+	}
+}
+
 func starterSSHProfileDraft(cfg domain.Config) domain.Profile {
 	return domain.Profile{
 		Name:        nextProfileDraftName(cfg, "draft-ssh"),
@@ -1585,6 +1693,73 @@ func starterStackMembers(profiles []app.ProfileView, stacks []app.StackView, foc
 	default:
 		return nil, "", fmt.Errorf("Select a profile first, then press A to create a stack draft.")
 	}
+}
+
+func cloneProfileDefinition(profile domain.Profile) domain.Profile {
+	cloned := profile
+	cloned.Labels = append([]string(nil), profile.Labels...)
+	if profile.SSH != nil {
+		sshCopy := *profile.SSH
+		cloned.SSH = &sshCopy
+	}
+	if profile.Kubernetes != nil {
+		kubernetesCopy := *profile.Kubernetes
+		cloned.Kubernetes = &kubernetesCopy
+	}
+	return cloned
+}
+
+func cloneStackDefinition(stack domain.Stack) domain.Stack {
+	cloned := stack
+	cloned.Labels = append([]string(nil), stack.Labels...)
+	cloned.Profiles = append([]string(nil), stack.Profiles...)
+	return cloned
+}
+
+func profileNames(cfg domain.Config) []string {
+	names := make([]string, 0, len(cfg.Profiles))
+	for _, profile := range cfg.Profiles {
+		names = append(names, profile.Name)
+	}
+	return names
+}
+
+func stackNames(cfg domain.Config) []string {
+	names := make([]string, 0, len(cfg.Stacks))
+	for _, stack := range cfg.Stacks {
+		names = append(names, stack.Name)
+	}
+	return names
+}
+
+func nextCopyName(existing []string, base string) string {
+	used := make(map[string]struct{}, len(existing))
+	for _, name := range existing {
+		used[name] = struct{}{}
+	}
+
+	candidate := base + "-copy"
+	if _, exists := used[candidate]; !exists {
+		return candidate
+	}
+
+	for idx := 2; ; idx++ {
+		candidate = fmt.Sprintf("%s-copy-%d", base, idx)
+		if _, exists := used[candidate]; !exists {
+			return candidate
+		}
+	}
+}
+
+func appendUniqueLabel(labels []string, label string) []string {
+	for _, existing := range labels {
+		if existing == label {
+			return append([]string(nil), labels...)
+		}
+	}
+
+	updated := append([]string(nil), labels...)
+	return append(updated, label)
 }
 
 func nextProfileDraftName(cfg domain.Config, base string) string {

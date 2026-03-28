@@ -253,6 +253,37 @@ func TestNextStackDraftNameAddsSuffixWhenNeeded(t *testing.T) {
 	}
 }
 
+func TestNextCopyNameAddsSuffixWhenNeeded(t *testing.T) {
+	t.Parallel()
+
+	if got := nextCopyName([]string{"prod-db"}, "prod-db"); got != "prod-db-copy" {
+		t.Fatalf("nextCopyName() = %q, want %q", got, "prod-db-copy")
+	}
+
+	existing := []string{"prod-db", "prod-db-copy", "prod-db-copy-2"}
+	if got := nextCopyName(existing, "prod-db"); got != "prod-db-copy-3" {
+		t.Fatalf("nextCopyName() = %q, want %q", got, "prod-db-copy-3")
+	}
+}
+
+func TestAppendUniqueLabelAvoidsDuplicates(t *testing.T) {
+	t.Parallel()
+
+	labels := []string{"prod"}
+	got := appendUniqueLabel(labels, "draft")
+	if want := "prod,draft"; strings.Join(got, ",") != want {
+		t.Fatalf("appendUniqueLabel() = %q, want %q", strings.Join(got, ","), want)
+	}
+	if want := "prod"; strings.Join(labels, ",") != want {
+		t.Fatalf("expected original labels unchanged, got %q", strings.Join(labels, ","))
+	}
+
+	got = appendUniqueLabel([]string{"prod", "draft"}, "draft")
+	if want := "prod,draft"; strings.Join(got, ",") != want {
+		t.Fatalf("appendUniqueLabel() with existing draft = %q, want %q", strings.Join(got, ","), want)
+	}
+}
+
 func TestCreateStarterProfileDraftPersistsAndSelects(t *testing.T) {
 	t.Parallel()
 
@@ -339,6 +370,161 @@ func TestCreateStarterStackDraftPersistsAndSelects(t *testing.T) {
 	}
 	if len(cfg.Stacks) != 2 {
 		t.Fatalf("expected persisted draft stack, got %d stacks", len(cfg.Stacks))
+	}
+}
+
+func TestCloneSelectedProfilePersistsAndSelects(t *testing.T) {
+	t.Parallel()
+
+	configPath := filepath.Join(t.TempDir(), "config.yaml")
+	cfg := storage.SampleConfig()
+	occupiedPort := cfg.Profiles[0]
+	occupiedPort.Name = "prod-db-shadow"
+	occupiedPort.LocalPort = 5433
+	cfg.Profiles = append(cfg.Profiles, occupiedPort)
+
+	service, err := app.NewService(cfg, newStubRuntimeController())
+	if err != nil {
+		t.Fatalf("new service: %v", err)
+	}
+
+	model := Model{
+		service:         service,
+		configPath:      configPath,
+		selectedProfile: 0,
+		selectedStack:   1,
+		filterQuery:     "prod",
+		filterMode:      true,
+	}
+
+	profiles := filterProfileViews(service.ProfileViews(), "")
+	stacks := filterStackViews(service.StackViews(), "")
+	model = model.cloneSelection(profiles, stacks)
+
+	if model.lastError != "" {
+		t.Fatalf("expected no error, got %q", model.lastError)
+	}
+	if !strings.Contains(model.lastNotice, "Cloned profile prod-db to prod-db-copy.") {
+		t.Fatalf("expected clone notice, got %q", model.lastNotice)
+	}
+	if model.focus != focusProfiles {
+		t.Fatalf("expected profiles focus, got %v", model.focus)
+	}
+	if model.filterQuery != "" || model.filterMode {
+		t.Fatalf("expected filter to reset, got query=%q mode=%v", model.filterQuery, model.filterMode)
+	}
+	if model.selectedStack != 0 {
+		t.Fatalf("expected stack selection reset, got %d", model.selectedStack)
+	}
+
+	views := model.service.ProfileViews()
+	if len(views) != 4 {
+		t.Fatalf("expected 4 profile views, got %d", len(views))
+	}
+
+	selected := views[model.selectedProfile].Profile
+	if selected.Name != "prod-db-copy" {
+		t.Fatalf("expected selected clone prod-db-copy, got %q", selected.Name)
+	}
+	if selected.LocalPort != 5434 {
+		t.Fatalf("expected cloned profile to use port 5434, got %d", selected.LocalPort)
+	}
+	if !containsLabel(selected.Labels, "draft") {
+		t.Fatalf("expected cloned profile to include draft label, got %#v", selected.Labels)
+	}
+	if containsLabel(views[0].Profile.Labels, "draft") {
+		t.Fatalf("expected original profile labels unchanged, got %#v", views[0].Profile.Labels)
+	}
+
+	persisted, err := storage.LoadConfig(configPath)
+	if err != nil {
+		t.Fatalf("load config: %v", err)
+	}
+
+	cloned, ok := findProfileByName(persisted.Profiles, "prod-db-copy")
+	if !ok {
+		t.Fatalf("expected persisted cloned profile, got %#v", persisted.Profiles)
+	}
+	if cloned.LocalPort != 5434 {
+		t.Fatalf("expected persisted clone port 5434, got %d", cloned.LocalPort)
+	}
+	if !containsLabel(cloned.Labels, "draft") {
+		t.Fatalf("expected persisted cloned profile to include draft label, got %#v", cloned.Labels)
+	}
+}
+
+func TestCloneSelectedStackPersistsAndSelects(t *testing.T) {
+	t.Parallel()
+
+	configPath := filepath.Join(t.TempDir(), "config.yaml")
+	service, err := app.NewService(storage.SampleConfig(), newStubRuntimeController())
+	if err != nil {
+		t.Fatalf("new service: %v", err)
+	}
+
+	model := Model{
+		service:         service,
+		configPath:      configPath,
+		focus:           focusStacks,
+		selectedProfile: 1,
+		selectedStack:   0,
+		filterQuery:     "backend",
+		filterMode:      true,
+	}
+
+	profiles := filterProfileViews(service.ProfileViews(), "")
+	stacks := filterStackViews(service.StackViews(), "")
+	model = model.cloneSelection(profiles, stacks)
+
+	if model.lastError != "" {
+		t.Fatalf("expected no error, got %q", model.lastError)
+	}
+	if !strings.Contains(model.lastNotice, "Cloned stack backend-dev to backend-dev-copy.") {
+		t.Fatalf("expected clone notice, got %q", model.lastNotice)
+	}
+	if model.focus != focusStacks {
+		t.Fatalf("expected stacks focus, got %v", model.focus)
+	}
+	if model.filterQuery != "" || model.filterMode {
+		t.Fatalf("expected filter to reset, got query=%q mode=%v", model.filterQuery, model.filterMode)
+	}
+	if model.selectedProfile != 0 {
+		t.Fatalf("expected profile selection reset, got %d", model.selectedProfile)
+	}
+
+	stackViews := model.service.StackViews()
+	if len(stackViews) != 2 {
+		t.Fatalf("expected 2 stack views, got %d", len(stackViews))
+	}
+
+	selected := stackViews[model.selectedStack].Stack
+	if selected.Name != "backend-dev-copy" {
+		t.Fatalf("expected selected clone backend-dev-copy, got %q", selected.Name)
+	}
+	if got := strings.Join(selected.Profiles, ","); got != "prod-db,api-debug" {
+		t.Fatalf("expected cloned stack members prod-db,api-debug, got %q", got)
+	}
+	if !containsLabel(selected.Labels, "draft") {
+		t.Fatalf("expected cloned stack to include draft label, got %#v", selected.Labels)
+	}
+	if containsLabel(stackViews[0].Stack.Labels, "draft") {
+		t.Fatalf("expected original stack labels unchanged, got %#v", stackViews[0].Stack.Labels)
+	}
+
+	persisted, err := storage.LoadConfig(configPath)
+	if err != nil {
+		t.Fatalf("load config: %v", err)
+	}
+
+	cloned, ok := findStackByName(persisted.Stacks, "backend-dev-copy")
+	if !ok {
+		t.Fatalf("expected persisted cloned stack, got %#v", persisted.Stacks)
+	}
+	if got := strings.Join(cloned.Profiles, ","); got != "prod-db,api-debug" {
+		t.Fatalf("expected persisted cloned stack members prod-db,api-debug, got %q", got)
+	}
+	if !containsLabel(cloned.Labels, "draft") {
+		t.Fatalf("expected persisted cloned stack to include draft label, got %#v", cloned.Labels)
 	}
 }
 
@@ -604,4 +790,31 @@ func (s *stubRuntimeController) Unsubscribe(id int) {
 		delete(s.subscriptions, id)
 		close(ch)
 	}
+}
+
+func containsLabel(labels []string, want string) bool {
+	for _, label := range labels {
+		if label == want {
+			return true
+		}
+	}
+	return false
+}
+
+func findProfileByName(profiles []domain.Profile, name string) (domain.Profile, bool) {
+	for _, profile := range profiles {
+		if profile.Name == name {
+			return profile, true
+		}
+	}
+	return domain.Profile{}, false
+}
+
+func findStackByName(stacks []domain.Stack, name string) (domain.Stack, bool) {
+	for _, stack := range stacks {
+		if stack.Name == name {
+			return stack, true
+		}
+	}
+	return domain.Stack{}, false
 }
