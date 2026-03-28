@@ -642,6 +642,7 @@ func isActiveStatus(status domain.TunnelStatus) bool {
 func cloneConfig(config domain.Config) domain.Config {
 	cloned := domain.Config{
 		Version:  config.Version,
+		Language: config.Language,
 		Profiles: make([]domain.Profile, 0, len(config.Profiles)),
 		Stacks:   make([]domain.Stack, 0, len(config.Stacks)),
 	}

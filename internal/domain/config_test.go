@@ -126,6 +126,22 @@ func TestProfileValidateRejectsIncompleteKubernetesProfile(t *testing.T) {
 	}
 }
 
+func TestConfigValidateRejectsUnsupportedLanguage(t *testing.T) {
+	t.Parallel()
+
+	cfg := DefaultConfig()
+	cfg.Language = Language("fr")
+
+	err := cfg.Validate()
+	if err == nil {
+		t.Fatal("expected language validation error")
+	}
+
+	if !strings.Contains(err.Error(), `unsupported language "fr"`) {
+		t.Fatalf("expected unsupported language error, got %v", err)
+	}
+}
+
 func TestConfigSetProfileReplacesExistingProfileByName(t *testing.T) {
 	t.Parallel()
 

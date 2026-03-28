@@ -225,11 +225,11 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 
 	case editorFinishedMsg:
 		if msg.err != nil {
-			m.lastError = "Editor exited with an error: " + msg.err.Error()
+			m.lastError = m.t("Editor exited with an error: ", "编辑器异常退出: ") + msg.err.Error()
 			return m, nil
 		}
 
-		m = m.reloadConfigFromDisk("Reloaded config after editing.")
+		m = m.reloadConfigFromDisk(m.t("Reloaded config after editing.", "编辑完成后已重新加载配置。"))
 		return m, nil
 
 	case tea.KeyMsg:
@@ -377,15 +377,16 @@ func (m Model) View() string {
 }
 
 func (m Model) renderHeaderLines(profiles []app.ProfileView, stacks []app.StackView, totalProfiles, totalStacks, width int) []string {
-	focusLabel := "profiles"
+	focusLabel := m.t("profiles", "配置")
 	if m.focus == focusStacks && len(stacks) > 0 {
-		focusLabel = "stacks"
+		focusLabel = m.t("stacks", "组合")
 	}
 
 	line1 := composeStyledLine(
 		titleStyle.Render("LazyTunnel")+" ",
-		fmt.Sprintf(
+		m.tf(
 			"profiles %s | stacks %s | active %d | focus %s",
+			"配置 %s | 组合 %s | 运行中 %d | 焦点 %s",
 			formatVisibleCount(len(profiles), totalProfiles),
 			formatVisibleCount(len(stacks), totalStacks),
 			countActiveProfiles(m.service.ProfileViews()),
@@ -402,16 +403,21 @@ func (m Model) renderHeaderLines(profiles []app.ProfileView, stacks []app.StackV
 func (m Model) renderHeaderMetaLine(profiles []app.ProfileView, stacks []app.StackView, width int) string {
 	separator := headerMetaSeparatorStyle.Render(" | ")
 	filterSegment := m.renderHeaderFilterSegment(preferredFilterInputWidth(width))
+	selectedValue := m.selectedLabel(profiles, stacks)
+	if selectedValue == "none" {
+		selectedValue = m.t("none", "无")
+	}
 	selectedSegment := m.renderHeaderMetaField(
-		"selected",
-		m.selectedLabel(profiles, stacks),
+		m.t("selected", "选中"),
+		selectedValue,
 		m.selectedValueStyle(profiles, stacks),
 		preferredSelectedValueWidth(width),
 	)
 
 	usedWidth := lipgloss.Width(filterSegment) + lipgloss.Width(separator) + lipgloss.Width(selectedSegment) + lipgloss.Width(separator)
-	configValueWidth := max(8, width-usedWidth-headerMetaLabelWidth("config"))
-	configSegment := m.renderHeaderMetaField("config", m.configPath, headerConfigValueStyle, configValueWidth)
+	configLabel := m.t("config", "配置")
+	configValueWidth := max(8, width-usedWidth-headerMetaLabelWidth(configLabel))
+	configSegment := m.renderHeaderMetaField(configLabel, m.configPath, headerConfigValueStyle, configValueWidth)
 
 	return filterSegment + separator + selectedSegment + separator + configSegment
 }
@@ -421,7 +427,7 @@ func (m Model) renderStatusLine(width int) string {
 	case m.pendingDelete != nil:
 		return renderInlineBanner(deletePromptStyle, m.pendingDelete.Message, width)
 	case m.lastError != "":
-		return renderInlineBanner(errorBannerStyle, "Last error: "+m.lastError, width)
+		return renderInlineBanner(errorBannerStyle, m.t("Last error: ", "最近错误: ")+m.lastError, width)
 	case m.lastNotice != "":
 		return renderInlineBanner(noticeBannerStyle, m.lastNotice, width)
 	default:
@@ -440,24 +446,24 @@ func (m Model) renderHintLine(width int) string {
 func (m Model) hintMessage() string {
 	switch {
 	case m.pendingDelete != nil:
-		return "Delete mode: y or Enter confirms. n or Esc cancels."
+		return m.t("Delete mode: y or Enter confirms. n or Esc cancels.", "删除模式: y 或 Enter 确认，n 或 Esc 取消。")
 	case m.filterMode:
-		return "Filter mode: type to search. Enter finishes. Esc cancels. Backspace/Ctrl+W deletes. Ctrl+U clears."
+		return m.t("Filter mode: type to search. Enter finishes. Esc cancels. Backspace/Ctrl+W deletes. Ctrl+U clears.", "筛选模式: 输入即可搜索。Enter 完成，Esc 取消，Backspace/Ctrl+W 删除，Ctrl+U 清空。")
 	case m.workspaceIsEmpty():
-		return "i init sample  a draft profile  e edit config  r reload  / filter  q quit"
+		return m.t("i init sample  a draft profile  e edit config  r reload  L language  / filter  q quit", "i 示例配置  a 配置草稿  e 编辑配置  r 重新加载  L 切换语言  / 筛选  q 退出")
 	}
 
 	profileCount := len(m.service.ProfileViews())
 	stackCount := len(m.service.StackViews())
 	switch {
 	case profileCount == 0:
-		return "a draft profile  e edit config  r reload  / filter  q quit"
+		return m.t("a draft profile  e edit config  r reload  L language  / filter  q quit", "a 配置草稿  e 编辑配置  r 重新加载  L 切换语言  / 筛选  q 退出")
 	case stackCount == 0:
-		return "j/k move  h/l inspector  c clone profile  A draft stack  e edit config  / filter  q quit"
+		return m.t("j/k move  h/l inspector  c clone profile  A draft stack  e edit config  L language  / filter  q quit", "j/k 移动  h/l 检查器  c 克隆配置  A 组合草稿  e 编辑配置  L 切换语言  / 筛选  q 退出")
 	case m.focus == focusStacks:
-		return "j/k move  Tab lists  h/l inspector  Enter toggle stack  c clone stack  A draft stack  d delete  / filter  q quit"
+		return m.t("j/k move  Tab lists  h/l inspector  Enter toggle stack  c clone stack  A draft stack  d delete  L language  / filter  q quit", "j/k 移动  Tab 列表  h/l 检查器  Enter 切换组合  c 克隆组合  A 组合草稿  d 删除  L 切换语言  / 筛选  q 退出")
 	default:
-		return "j/k move  Tab lists  h/l inspector  Enter toggle  c clone profile  A draft stack  d delete  / filter  q quit"
+		return m.t("j/k move  Tab lists  h/l inspector  Enter toggle  c clone profile  A draft stack  d delete  L language  / filter  q quit", "j/k 移动  Tab 列表  h/l 检查器  Enter 切换  c 克隆配置  A 组合草稿  d 删除  L 切换语言  / 筛选  q 退出")
 	}
 }
 
@@ -512,21 +518,21 @@ func (m Model) renderProfilesPanel(views []app.ProfileView, width, height int) s
 	bodyHeight := panelBodyHeight(height)
 	focused := m.focus == focusProfiles
 
-	title := panelListTitle("Profiles", len(views), 0, len(views))
+	title := panelListTitle(m.t("Profiles", "配置"), len(views), 0, len(views))
 	if len(views) == 0 {
 		if m.filterQuery != "" {
-			message := fmt.Sprintf("No profiles match %q. Press Esc to clear the filter.", m.filterQuery)
+			message := m.tf("No profiles match %q. Press Esc to clear the filter.", "没有匹配 %q 的配置。按 Esc 清除筛选。", m.filterQuery)
 			return renderFixedPanel(title, []string{mutedStyle.Render(truncateText(message, innerWidth))}, width, height, focused)
 		}
 		if m.workspaceIsEmpty() {
 			return renderFixedPanel(title, m.renderEmptyProfilesLines(innerWidth), width, height, focused)
 		}
-		message := "No profiles yet. Press a to add a starter draft or e to edit the config file."
+		message := m.t("No profiles yet. Press a to add a starter draft or e to edit the config file.", "还没有配置。按 a 创建草稿，或按 e 编辑配置文件。")
 		return renderFixedPanel(title, []string{mutedStyle.Render(truncateText(message, innerWidth))}, width, height, focused)
 	}
 
 	start, end := windowAroundSelection(len(views), m.selectedProfile, bodyHeight)
-	title = panelListTitle("Profiles", len(views), start, end)
+	title = panelListTitle(m.t("Profiles", "配置"), len(views), start, end)
 
 	rows := make([]string, 0, end-start)
 	for idx := start; idx < end; idx++ {
@@ -541,21 +547,21 @@ func (m Model) renderStacksPanel(views []app.StackView, width, height int) strin
 	bodyHeight := panelBodyHeight(height)
 	focused := m.focus == focusStacks
 
-	title := panelListTitle("Stacks", len(views), 0, len(views))
+	title := panelListTitle(m.t("Stacks", "组合"), len(views), 0, len(views))
 	if len(views) == 0 {
 		if m.filterQuery != "" {
-			message := fmt.Sprintf("No stacks match %q. Press Esc to clear the filter.", m.filterQuery)
+			message := m.tf("No stacks match %q. Press Esc to clear the filter.", "没有匹配 %q 的组合。按 Esc 清除筛选。", m.filterQuery)
 			return renderFixedPanel(title, []string{mutedStyle.Render(truncateText(message, innerWidth))}, width, height, focused)
 		}
 		if len(m.service.ProfileViews()) > 0 {
 			return renderFixedPanel(title, m.renderEmptyStacksLines(innerWidth), width, height, focused)
 		}
-		message := "No stacks yet. Add stacks to your config to launch groups of tunnels together."
+		message := m.t("No stacks yet. Add stacks to your config to launch groups of tunnels together.", "还没有组合。把组合加进配置后，就能成组启动隧道。")
 		return renderFixedPanel(title, []string{mutedStyle.Render(truncateText(message, innerWidth))}, width, height, focused)
 	}
 
 	start, end := windowAroundSelection(len(views), m.selectedStack, bodyHeight)
-	title = panelListTitle("Stacks", len(views), start, end)
+	title = panelListTitle(m.t("Stacks", "组合"), len(views), start, end)
 
 	rows := make([]string, 0, end-start)
 	for idx := start; idx < end; idx++ {
@@ -570,8 +576,8 @@ func (m Model) renderProfileRow(view app.ProfileView, selected bool, focused boo
 	marker := selectionMarker(selected, focused)
 	contentWidth := max(1, width-style.GetHorizontalFrameSize()-lipgloss.Width(marker))
 	line := composeStyledLine(
-		renderStatusBadge(view.State.Status)+" ",
-		fmt.Sprintf("%s  :%d  %s", view.Profile.Name, view.Profile.LocalPort, profileTarget(view.Profile)),
+		renderStatusBadge(m.language(), view.State.Status)+" ",
+		fmt.Sprintf("%s  :%d  %s", view.Profile.Name, view.Profile.LocalPort, profileTarget(m.language(), view.Profile)),
 		contentWidth,
 	)
 	return renderSizedBlock(style, width, marker+line)
@@ -582,8 +588,8 @@ func (m Model) renderStackRow(view app.StackView, selected bool, focused bool, w
 	marker := selectionMarker(selected, focused)
 	contentWidth := max(1, width-style.GetHorizontalFrameSize()-lipgloss.Width(marker))
 	line := composeStyledLine(
-		renderStackStatusBadge(view.Status)+" ",
-		fmt.Sprintf("%s  %d/%d  %s", view.Stack.Name, view.ActiveCount, len(view.Members), stackMembersSummary(view)),
+		renderStackStatusBadge(m.language(), view.Status)+" ",
+		fmt.Sprintf("%s  %d/%d  %s", view.Stack.Name, view.ActiveCount, len(view.Members), stackMembersSummary(m.language(), view)),
 		contentWidth,
 	)
 	return renderSizedBlock(style, width, marker+line)
@@ -605,15 +611,15 @@ func (m Model) renderInspectorPanel(profiles []app.ProfileView, stacks []app.Sta
 func (m Model) inspectorTitle(profiles []app.ProfileView, stacks []app.StackView) string {
 	label := m.selectedLabel(profiles, stacks)
 	if label == "none" {
-		return "Inspector"
+		return m.t("Inspector", "检查器")
 	}
-	return "Inspector " + label
+	return m.t("Inspector ", "检查器 ") + label
 }
 
 func (m Model) renderInspectorTabs(width int) string {
 	tabs := []string{
-		renderInspectorTab("h", "Details", m.inspectorTab == inspectorTabDetails),
-		renderInspectorTab("l", "Logs", m.inspectorTab == inspectorTabLogs),
+		renderInspectorTab("h", m.t("Details", "详情"), m.inspectorTab == inspectorTabDetails),
+		renderInspectorTab("l", m.t("Logs", "日志"), m.inspectorTab == inspectorTabLogs),
 	}
 	line := strings.Join(tabs, " ")
 	return lipgloss.NewStyle().Width(max(1, width)).Render(line)
@@ -621,7 +627,7 @@ func (m Model) renderInspectorTabs(width int) string {
 
 func (m Model) renderInspectorScrollLine(scroll, pageSize, total, width int) string {
 	if total == 0 {
-		return renderInlineText(mutedStyle, "Lines 0/0", width)
+		return renderInlineText(mutedStyle, m.t("Lines 0/0", "行 0/0"), width)
 	}
 
 	start := min(total, scroll+1)
@@ -633,7 +639,7 @@ func (m Model) renderInspectorScrollLine(scroll, pageSize, total, width int) str
 
 	return renderInlineText(
 		mutedStyle,
-		fmt.Sprintf("Lines %d-%d/%d", start, end, total),
+		m.tf("Lines %d-%d/%d", "行 %d-%d/%d", start, end, total),
 		width,
 	)
 }
@@ -647,9 +653,9 @@ func (m Model) currentInspectorLines(profiles []app.ProfileView, stacks []app.St
 			return m.renderProfileLogLines(profiles[m.selectedProfile], width)
 		}
 		if m.filterQuery != "" {
-			return []string{mutedStyle.Render(truncateText("No filtered profile is selected, so there are no logs to show.", width))}
+			return []string{mutedStyle.Render(truncateText(m.t("No filtered profile is selected, so there are no logs to show.", "当前没有选中筛选后的配置，因此没有可显示的日志。"), width))}
 		}
-		return []string{mutedStyle.Render(truncateText("Start a tunnel to see runtime output here.", width))}
+		return []string{mutedStyle.Render(truncateText(m.t("Start a tunnel to see runtime output here.", "启动隧道后，这里会显示运行日志。"), width))}
 	}
 
 	if m.focus == focusStacks && len(stacks) > 0 {
@@ -659,93 +665,95 @@ func (m Model) currentInspectorLines(profiles []app.ProfileView, stacks []app.St
 		return m.renderProfileDetailLines(profiles[m.selectedProfile], width)
 	}
 	if m.filterQuery != "" {
-		return []string{mutedStyle.Render(truncateText("No profile matches the current filter.", width))}
+		return []string{mutedStyle.Render(truncateText(m.t("No profile matches the current filter.", "当前筛选下没有匹配的配置。"), width))}
 	}
 	if m.workspaceIsEmpty() {
 		return m.renderEmptyInspectorLines(width)
 	}
-	return []string{mutedStyle.Render(truncateText("No profile selected.", width))}
+	return []string{mutedStyle.Render(truncateText(m.t("No profile selected.", "当前没有选中的配置。"), width))}
 }
 
 func (m Model) renderProfileDetailLines(view app.ProfileView, width int) []string {
 	now := m.currentTime()
+	language := m.language()
 	spec, specErr := app.BuildProcessSpec(view.Profile)
 	lines := []string{
 		composeStyledLine(
-			renderStatusBadge(view.State.Status)+" ",
-			fmt.Sprintf("%s  %s", view.Profile.Name, humanTunnelType(view.Profile.Type)),
+			renderStatusBadge(language, view.State.Status)+" ",
+			fmt.Sprintf("%s  %s", view.Profile.Name, humanTunnelType(language, view.Profile.Type)),
 			width,
 		),
-		groupTitleStyle.Render("Overview"),
-		renderCompactKeyValue("Local", fmt.Sprintf(":%d", view.Profile.LocalPort), width),
-		renderCompactKeyValue("Target", profileTarget(view.Profile), width),
-		groupTitleStyle.Render("Runtime"),
-		renderCompactKeyValue("Status", humanTunnelStatus(view.State.Status), width),
+		groupTitleStyle.Render(m.t("Overview", "概览")),
+		renderCompactKeyValue(m.t("Local", "本地"), fmt.Sprintf(":%d", view.Profile.LocalPort), width),
+		renderCompactKeyValue(m.t("Target", "目标"), profileTarget(language, view.Profile), width),
+		groupTitleStyle.Render(m.t("Runtime", "运行态")),
+		renderCompactKeyValue(m.t("Status", "状态"), humanTunnelStatus(language, view.State.Status), width),
 		renderCompactKeyValue("PID", formatPID(view.State.PID), width),
-		renderCompactKeyValue("Uptime", formatUptime(view.State.StartedAt, now), width),
-		renderCompactKeyValue("Restarts", fmt.Sprintf("%d", view.State.RestartCount), width),
-		renderCompactKeyValue("Last Exit", formatLastExit(view.State, now), width),
-		renderCompactKeyValue("Restart", restartPolicySummary(view.Profile.Restart), width),
+		renderCompactKeyValue(m.t("Uptime", "运行时长"), formatUptime(view.State.StartedAt, now), width),
+		renderCompactKeyValue(m.t("Restarts", "重试次数"), fmt.Sprintf("%d", view.State.RestartCount), width),
+		renderCompactKeyValue(m.t("Last Exit", "上次退出"), formatLastExit(language, view.State, now), width),
+		renderCompactKeyValue(m.t("Restart", "重启策略"), restartPolicySummary(language, view.Profile.Restart), width),
 	}
 
 	lines = append(lines, m.renderProfileStartLines(view, specErr, width)...)
 
 	configLines := make([]string, 0, 4)
 	if view.Profile.Description != "" {
-		configLines = append(configLines, renderCompactKeyValue("About", view.Profile.Description, width))
+		configLines = append(configLines, renderCompactKeyValue(m.t("About", "说明"), view.Profile.Description, width))
 	}
 	if len(view.Profile.Labels) > 0 {
-		configLines = append(configLines, renderCompactKeyValue("Labels", strings.Join(view.Profile.Labels, ", "), width))
+		configLines = append(configLines, renderCompactKeyValue(m.t("Labels", "标签"), strings.Join(view.Profile.Labels, ", "), width))
 	}
 	if len(configLines) > 0 {
-		lines = append(lines, groupTitleStyle.Render("Config"))
+		lines = append(lines, groupTitleStyle.Render(m.t("Config", "配置")))
 		lines = append(lines, configLines...)
 	}
 
 	if specErr == nil {
-		lines = append(lines, groupTitleStyle.Render("Command"))
+		lines = append(lines, groupTitleStyle.Render(m.t("Command", "命令")))
 		lines = append(lines, renderCompactKeyValue("Exec", spec.DisplayCommand(), width))
 	}
 
 	problemLines := make([]string, 0, 2)
 	if specErr != nil {
-		problemLines = append(problemLines, renderCompactKeyValue("Config", specErr.Error(), width))
+		problemLines = append(problemLines, renderCompactKeyValue(m.t("Config", "配置"), specErr.Error(), width))
 	}
 	if view.State.LastError != "" {
-		problemLines = append(problemLines, renderCompactKeyValue("Error", view.State.LastError, width))
+		problemLines = append(problemLines, renderCompactKeyValue(m.t("Error", "错误"), view.State.LastError, width))
 	}
 	if len(problemLines) > 0 {
-		lines = append(lines, groupTitleStyle.Render("Problem"))
+		lines = append(lines, groupTitleStyle.Render(m.t("Problem", "问题")))
 		lines = append(lines, problemLines...)
 	}
 
-	lines = append(lines, groupTitleStyle.Render("Actions"))
-	lines = append(lines, profileActionLines(view, width)...)
+	lines = append(lines, groupTitleStyle.Render(m.t("Actions", "操作")))
+	lines = append(lines, m.profileActionLines(view, width)...)
 
 	return lines
 }
 
 func (m Model) renderStackDetailLines(view app.StackView, width int) []string {
+	language := m.language()
 	lines := []string{
 		composeStyledLine(
-			renderStackStatusBadge(view.Status)+" ",
-			fmt.Sprintf("%s  %s", view.Stack.Name, humanStackStatus(view.Status)),
+			renderStackStatusBadge(language, view.Status)+" ",
+			fmt.Sprintf("%s  %s", view.Stack.Name, humanStackStatus(language, view.Status)),
 			width,
 		),
-		groupTitleStyle.Render("Overview"),
-		renderCompactKeyValue("Members", fmt.Sprintf("%d", len(view.Members)), width),
-		renderCompactKeyValue("Active", fmt.Sprintf("%d", view.ActiveCount), width),
-		renderCompactKeyValue("Coverage", fmt.Sprintf("%d/%d running", view.ActiveCount, len(view.Members)), width),
-		groupTitleStyle.Render("Members"),
+		groupTitleStyle.Render(m.t("Overview", "概览")),
+		renderCompactKeyValue(m.t("Members", "成员"), fmt.Sprintf("%d", len(view.Members)), width),
+		renderCompactKeyValue(m.t("Active", "已运行"), fmt.Sprintf("%d", view.ActiveCount), width),
+		renderCompactKeyValue(m.t("Coverage", "覆盖率"), m.tf("%d/%d running", "%d/%d 运行中", view.ActiveCount, len(view.Members)), width),
+		groupTitleStyle.Render(m.t("Members", "成员")),
 	}
 
 	if len(view.Members) == 0 {
-		lines = append(lines, mutedStyle.Render(truncateText("No member profiles resolved from config.", width)))
+		lines = append(lines, mutedStyle.Render(truncateText(m.t("No member profiles resolved from config.", "配置里没有解析出任何成员配置。"), width)))
 	} else {
 		for _, member := range view.Members {
 			lines = append(lines, composeStyledLine(
-				renderStatusBadge(member.State.Status)+" ",
-				fmt.Sprintf("%s  :%d  %s", member.Profile.Name, member.Profile.LocalPort, profileTarget(member.Profile)),
+				renderStatusBadge(language, member.State.Status)+" ",
+				fmt.Sprintf("%s  :%d  %s", member.Profile.Name, member.Profile.LocalPort, profileTarget(language, member.Profile)),
 				width,
 			))
 		}
@@ -754,36 +762,36 @@ func (m Model) renderStackDetailLines(view app.StackView, width int) []string {
 	lines = append(lines, m.renderStackStartLines(view, width)...)
 
 	if missingProfiles := missingStackProfiles(view); len(missingProfiles) > 0 {
-		lines = append(lines, groupTitleStyle.Render("Problem"))
-		lines = append(lines, renderCompactKeyValue("Missing", strings.Join(missingProfiles, ", "), width))
+		lines = append(lines, groupTitleStyle.Render(m.t("Problem", "问题")))
+		lines = append(lines, renderCompactKeyValue(m.t("Missing", "缺失"), strings.Join(missingProfiles, ", "), width))
 	}
 
 	configLines := make([]string, 0, 4)
 	if view.Stack.Description != "" {
-		configLines = append(configLines, renderCompactKeyValue("About", view.Stack.Description, width))
+		configLines = append(configLines, renderCompactKeyValue(m.t("About", "说明"), view.Stack.Description, width))
 	}
 	if len(view.Stack.Labels) > 0 {
-		configLines = append(configLines, renderCompactKeyValue("Labels", strings.Join(view.Stack.Labels, ", "), width))
+		configLines = append(configLines, renderCompactKeyValue(m.t("Labels", "标签"), strings.Join(view.Stack.Labels, ", "), width))
 	}
 	if len(configLines) > 0 {
-		lines = append(lines, groupTitleStyle.Render("Config"))
+		lines = append(lines, groupTitleStyle.Render(m.t("Config", "配置")))
 		lines = append(lines, configLines...)
 	}
 
 	if view.Status == app.StackStatusPartial {
-		lines = append(lines, groupTitleStyle.Render("Action"))
-		lines = append(lines, mutedStyle.Render(truncateText("Press Enter to start the missing members and restore the stack.", width)))
+		lines = append(lines, groupTitleStyle.Render(m.t("Action", "动作")))
+		lines = append(lines, mutedStyle.Render(truncateText(m.t("Press Enter to start the missing members and restore the stack.", "按 Enter 启动缺失成员并恢复这个组合。"), width)))
 	}
 
-	lines = append(lines, groupTitleStyle.Render("Actions"))
-	lines = append(lines, stackActionLines(view, width)...)
+	lines = append(lines, groupTitleStyle.Render(m.t("Actions", "操作")))
+	lines = append(lines, m.stackActionLines(view, width)...)
 
 	return lines
 }
 
 func (m Model) renderProfileLogLines(view app.ProfileView, width int) []string {
 	if len(view.State.RecentLogs) == 0 {
-		return []string{mutedStyle.Render(truncateText("No logs yet. Start the tunnel to collect runtime output.", width))}
+		return []string{mutedStyle.Render(truncateText(m.t("No logs yet. Start the tunnel to collect runtime output.", "还没有日志。启动隧道后，这里会显示运行输出。"), width))}
 	}
 
 	lines := make([]string, 0, len(view.State.RecentLogs))
@@ -801,7 +809,7 @@ func (m Model) renderStackLogLines(view app.StackView, width int) []string {
 		totalEntries += len(member.State.RecentLogs)
 	}
 	if totalEntries == 0 {
-		return []string{mutedStyle.Render(truncateText("No recent stack activity yet. Start a member to begin collecting logs.", width))}
+		return []string{mutedStyle.Render(truncateText(m.t("No recent stack activity yet. Start a member to begin collecting logs.", "还没有最近的组合活动。启动任一成员后，这里会开始显示日志。"), width))}
 	}
 
 	activity := recentStackActivity(view, totalEntries)
@@ -838,10 +846,10 @@ func (m Model) normalizeSelection(profileCount, stackCount int) Model {
 
 func (m Model) selectedLabel(profiles []app.ProfileView, stacks []app.StackView) string {
 	if m.focus == focusStacks && len(stacks) > 0 {
-		return "stack/" + stacks[m.selectedStack].Stack.Name
+		return m.tf("stack/%s", "组合/%s", stacks[m.selectedStack].Stack.Name)
 	}
 	if len(profiles) > 0 {
-		return "profile/" + profiles[m.selectedProfile].Profile.Name
+		return m.tf("profile/%s", "配置/%s", profiles[m.selectedProfile].Profile.Name)
 	}
 	return "none"
 }
@@ -918,7 +926,7 @@ func (m Model) handleFilterKey(msg tea.KeyMsg) (Model, bool) {
 func (m Model) handleWorkspaceKey(msg tea.KeyMsg, profiles []app.ProfileView, stacks []app.StackView) (Model, tea.Cmd, bool) {
 	switch msg.String() {
 	case "r":
-		m = m.reloadConfigFromDisk("Reloaded config from disk.")
+		m = m.reloadConfigFromDisk(m.t("Reloaded config from disk.", "已从磁盘重新加载配置。"))
 		return m, nil, true
 	case "e":
 		if err := m.ensureConfigFileExists(); err != nil {
@@ -936,6 +944,9 @@ func (m Model) handleWorkspaceKey(msg tea.KeyMsg, profiles []app.ProfileView, st
 		return m, nil, true
 	case "a":
 		m = m.createStarterProfileDraft()
+		return m, nil, true
+	case "L":
+		m = m.toggleLanguage()
 		return m, nil, true
 	case "c":
 		m = m.cloneSelection(profiles, stacks)
@@ -960,8 +971,9 @@ func (m Model) initializeSampleConfig() Model {
 	m.filterMode = false
 
 	cfg := storage.SampleConfig()
+	cfg.Language = m.language()
 	if err := storage.SaveConfig(m.configPath, cfg); err != nil {
-		m.lastError = "Initialize sample config: " + err.Error()
+		m.lastError = m.t("Initialize sample config: ", "初始化示例配置失败: ") + err.Error()
 		return m
 	}
 
@@ -971,7 +983,7 @@ func (m Model) initializeSampleConfig() Model {
 	m.selectedStack = 0
 	m.inspectorTab = inspectorTabDetails
 	m.inspectorScroll = 0
-	m.lastNotice = "Initialized sample config with starter profiles and a stack."
+	m.lastNotice = m.t("Initialized sample config with starter profiles and a stack.", "已初始化示例配置，包含示例配置和一个组合。")
 	return m
 }
 
@@ -982,11 +994,11 @@ func (m Model) createStarterProfileDraft() Model {
 	m.filterMode = false
 
 	cfg := m.service.Config()
-	profile := starterSSHProfileDraft(cfg)
+	profile := starterSSHProfileDraft(cfg, m.language())
 	cfg.SetProfile(profile)
 
 	if err := storage.SaveConfig(m.configPath, cfg); err != nil {
-		m.lastError = "Create starter profile: " + err.Error()
+		m.lastError = m.t("Create starter profile: ", "创建配置草稿失败: ") + err.Error()
 		return m
 	}
 
@@ -996,7 +1008,7 @@ func (m Model) createStarterProfileDraft() Model {
 	m.inspectorTab = inspectorTabDetails
 	m.inspectorScroll = 0
 	m.selectProfileByName(profile.Name)
-	m.lastNotice = fmt.Sprintf("Created starter profile %s. Press e to refine the config.", profile.Name)
+	m.lastNotice = m.tf("Created starter profile %s. Press e to refine the config.", "已创建配置草稿 %s。按 e 继续完善配置。", profile.Name)
 	return m
 }
 
@@ -1005,7 +1017,7 @@ func (m Model) createStarterStackDraft(profiles []app.ProfileView, stacks []app.
 	m.lastNotice = ""
 
 	cfg := m.service.Config()
-	stack, err := starterStackDraft(cfg, profiles, stacks, m.focus, m.selectedProfile, m.selectedStack, m.filterQuery)
+	stack, err := starterStackDraft(cfg, profiles, stacks, m.focus, m.selectedProfile, m.selectedStack, m.filterQuery, m.language())
 	if err != nil {
 		m.lastError = err.Error()
 		return m
@@ -1016,7 +1028,7 @@ func (m Model) createStarterStackDraft(profiles []app.ProfileView, stacks []app.
 	cfg.SetStack(stack)
 
 	if err := storage.SaveConfig(m.configPath, cfg); err != nil {
-		m.lastError = "Create starter stack: " + err.Error()
+		m.lastError = m.t("Create starter stack: ", "创建组合草稿失败: ") + err.Error()
 		return m
 	}
 
@@ -1026,7 +1038,25 @@ func (m Model) createStarterStackDraft(profiles []app.ProfileView, stacks []app.
 	m.inspectorTab = inspectorTabDetails
 	m.inspectorScroll = 0
 	m.selectStackByName(stack.Name)
-	m.lastNotice = fmt.Sprintf("Created starter stack %s. Press e to refine the config.", stack.Name)
+	m.lastNotice = m.tf("Created starter stack %s. Press e to refine the config.", "已创建组合草稿 %s。按 e 继续完善配置。", stack.Name)
+	return m
+}
+
+func (m Model) toggleLanguage() Model {
+	m.lastError = ""
+	m.lastNotice = ""
+
+	cfg := m.service.Config()
+	next := nextLanguage(cfg.Language)
+	cfg.Language = next
+
+	if err := storage.SaveConfig(m.configPath, cfg); err != nil {
+		m.lastError = m.t("Switch language: ", "切换语言失败: ") + err.Error()
+		return m
+	}
+
+	m.service.ReplaceConfig(cfg)
+	m.lastNotice = translatef(next, "Switched language to %s.", "已切换语言为%s。", languageDisplayName(next))
 	return m
 }
 
@@ -1041,10 +1071,10 @@ func (m Model) cloneSelection(profiles []app.ProfileView, stacks []app.StackView
 		return m.cloneSelectedProfile(profiles)
 	}
 	if m.filterQuery != "" {
-		m.lastError = "No visible item to clone. Clear the filter or select a different item."
+		m.lastError = m.t("No visible item to clone. Clear the filter or select a different item.", "没有可见项可克隆。请清除筛选或换一个条目。")
 		return m
 	}
-	m.lastError = "Nothing is selected to clone yet."
+	m.lastError = m.t("Nothing is selected to clone yet.", "当前还没有选中任何可克隆的条目。")
 	return m
 }
 
@@ -1058,7 +1088,7 @@ func (m Model) cloneSelectedProfile(profiles []app.ProfileView) Model {
 
 	cfg.SetProfile(profile)
 	if err := storage.SaveConfig(m.configPath, cfg); err != nil {
-		m.lastError = "Clone profile: " + err.Error()
+		m.lastError = m.t("Clone profile: ", "克隆配置失败: ") + err.Error()
 		return m
 	}
 
@@ -1070,7 +1100,7 @@ func (m Model) cloneSelectedProfile(profiles []app.ProfileView) Model {
 	m.inspectorTab = inspectorTabDetails
 	m.inspectorScroll = 0
 	m.selectProfileByName(profile.Name)
-	m.lastNotice = fmt.Sprintf("Cloned profile %s to %s.", selected.Profile.Name, profile.Name)
+	m.lastNotice = m.tf("Cloned profile %s to %s.", "已将配置 %s 克隆为 %s。", selected.Profile.Name, profile.Name)
 	return m
 }
 
@@ -1083,7 +1113,7 @@ func (m Model) cloneSelectedStack(stacks []app.StackView) Model {
 
 	cfg.SetStack(stack)
 	if err := storage.SaveConfig(m.configPath, cfg); err != nil {
-		m.lastError = "Clone stack: " + err.Error()
+		m.lastError = m.t("Clone stack: ", "克隆组合失败: ") + err.Error()
 		return m
 	}
 
@@ -1095,7 +1125,7 @@ func (m Model) cloneSelectedStack(stacks []app.StackView) Model {
 	m.inspectorTab = inspectorTabDetails
 	m.inspectorScroll = 0
 	m.selectStackByName(stack.Name)
-	m.lastNotice = fmt.Sprintf("Cloned stack %s to %s.", selected.Stack.Name, stack.Name)
+	m.lastNotice = m.tf("Cloned stack %s to %s.", "已将组合 %s 克隆为 %s。", selected.Stack.Name, stack.Name)
 	return m
 }
 
@@ -1105,7 +1135,7 @@ func (m Model) reloadConfigFromDisk(successNotice string) Model {
 
 	cfg, err := storage.LoadConfig(m.configPath)
 	if err != nil {
-		m.lastError = "Reload config: " + err.Error()
+		m.lastError = m.t("Reload config: ", "重新加载配置失败: ") + err.Error()
 		return m
 	}
 
@@ -1215,7 +1245,7 @@ func (m Model) handleDeleteKey(msg tea.KeyMsg, profiles []app.ProfileView, stack
 	switch msg.String() {
 	case "n", "esc":
 		m.pendingDelete = nil
-		m.lastNotice = "Delete cancelled."
+		m.lastNotice = m.t("Delete cancelled.", "已取消删除。")
 		return m, true
 	case "y", "enter":
 		m = m.confirmDelete()
@@ -1228,8 +1258,9 @@ func (m Model) handleDeleteKey(msg tea.KeyMsg, profiles []app.ProfileView, stack
 func (m Model) buildDeleteRequest(profiles []app.ProfileView, stacks []app.StackView) *deleteRequest {
 	if m.focus == focusStacks && len(stacks) > 0 {
 		view := stacks[m.selectedStack]
-		message := fmt.Sprintf(
+		message := m.tf(
 			"Delete stack %s? This removes the saved stack only; member tunnels keep running. Press y or Enter to confirm, n or Esc to cancel.",
+			"删除组合 %s？这只会移除保存的组合，成员隧道会继续运行。按 y 或 Enter 确认，n 或 Esc 取消。",
 			view.Stack.Name,
 		)
 		return &deleteRequest{
@@ -1248,7 +1279,7 @@ func (m Model) buildDeleteRequest(profiles []app.ProfileView, stacks []app.Stack
 	stackNames := config.StacksReferencingProfile(view.Profile.Name)
 	impactParts := make([]string, 0, 4)
 	if isActiveTunnelStatus(view.State.Status) {
-		impactParts = append(impactParts, "the running tunnel will be stopped")
+		impactParts = append(impactParts, m.t("the running tunnel will be stopped", "正在运行的隧道会先被停止"))
 	}
 	if len(stackNames) > 0 {
 		emptyStacks := 0
@@ -1257,18 +1288,19 @@ func (m Model) buildDeleteRequest(profiles []app.ProfileView, stacks []app.Stack
 				emptyStacks++
 			}
 		}
-		impact := fmt.Sprintf("%d stack references will be pruned", len(stackNames))
+		impact := m.tf("%d stack references will be pruned", "会裁剪 %d 处组合引用", len(stackNames))
 		if emptyStacks > 0 {
-			impact += fmt.Sprintf(" and %d empty stacks will be removed", emptyStacks)
+			impact += m.tf(" and %d empty stacks will be removed", "，并移除 %d 个空组合", emptyStacks)
 		}
 		impactParts = append(impactParts, impact)
 	}
 	if len(impactParts) == 0 {
-		impactParts = append(impactParts, "this profile will be removed from the saved config")
+		impactParts = append(impactParts, m.t("this profile will be removed from the saved config", "这个配置会从保存的配置中移除"))
 	}
 
-	message := fmt.Sprintf(
+	message := m.tf(
 		"Delete profile %s? %s. Press y or Enter to confirm, n or Esc to cancel.",
+		"删除配置 %s？%s。按 y 或 Enter 确认，n 或 Esc 取消。",
 		view.Profile.Name,
 		strings.Join(impactParts, "; "),
 	)
@@ -1299,7 +1331,7 @@ func (m Model) confirmDelete() Model {
 			return m
 		}
 
-		m.lastNotice = profileDeleteNotice(result)
+		m.lastNotice = profileDeleteNotice(m.language(), result)
 		return m
 
 	case deleteKindStack:
@@ -1311,7 +1343,7 @@ func (m Model) confirmDelete() Model {
 			return m
 		}
 
-		m.lastNotice = fmt.Sprintf("Removed stack %s.", result.Name)
+		m.lastNotice = m.tf("Removed stack %s.", "已移除组合 %s。", result.Name)
 		return m
 	default:
 		return m
@@ -1551,9 +1583,9 @@ func (m Model) renderHeaderFilterSegment(inputWidth int) string {
 	valueStyle := sectionTextStyle
 	if value == "" {
 		if m.filterMode {
-			value = "type to filter"
+			value = m.t("type to filter", "输入以筛选")
 		} else {
-			value = "name, label, target"
+			value = m.t("name, label, target", "名称、标签、目标")
 		}
 		valueStyle = filterPlaceholderStyle
 	}
@@ -1570,7 +1602,7 @@ func (m Model) renderHeaderFilterSegment(inputWidth int) string {
 
 	return lipgloss.JoinHorizontal(
 		lipgloss.Center,
-		labelStyle.Render("Filter"),
+		labelStyle.Render(m.t("Filter", "筛选")),
 		" ",
 		renderSizedBlock(inputStyle, inputWidth, content),
 	)
@@ -1585,35 +1617,38 @@ func (m Model) selectedValueStyle(profiles []app.ProfileView, stacks []app.Stack
 
 func (m Model) renderEmptyProfilesLines(width int) []string {
 	rows := renderQuickActionRows(width, []quickAction{
-		{key: "i", label: "sample config"},
-		{key: "a", label: "draft profile"},
-		{key: "e", label: "edit config"},
-		{key: "r", label: "reload config"},
+		{key: "i", label: m.t("sample config", "示例配置")},
+		{key: "a", label: m.t("draft profile", "配置草稿")},
+		{key: "e", label: m.t("edit config", "编辑配置")},
+		{key: "r", label: m.t("reload config", "重新加载配置")},
+		{key: "L", label: m.t("switch language", "切换语言")},
 	})
-	return append(rows, mutedStyle.Render(truncateText("No profiles yet. Start here.", width)))
+	return append(rows, mutedStyle.Render(truncateText(m.t("No profiles yet. Start here.", "还没有配置。从这里开始。"), width)))
 }
 
 func (m Model) renderEmptyStacksLines(width int) []string {
 	rows := renderQuickActionRows(width, []quickAction{
-		{key: "A", label: "draft stack"},
-		{key: "e", label: "edit config"},
-		{key: "r", label: "reload config"},
-		{key: "Tab", label: "focus profiles"},
+		{key: "A", label: m.t("draft stack", "组合草稿")},
+		{key: "e", label: m.t("edit config", "编辑配置")},
+		{key: "r", label: m.t("reload config", "重新加载配置")},
+		{key: "L", label: m.t("switch language", "切换语言")},
+		{key: "Tab", label: m.t("focus profiles", "切到配置")},
 	})
-	return append(rows, mutedStyle.Render(truncateText("No stacks yet. Create one from the selected profile.", width)))
+	return append(rows, mutedStyle.Render(truncateText(m.t("No stacks yet. Create one from the selected profile.", "还没有组合。可以从当前选中的配置创建一个。"), width)))
 }
 
 func (m Model) renderEmptyInspectorLines(width int) []string {
 	return []string{
-		groupTitleStyle.Render("Quick Start"),
-		sectionTextStyle.Render(truncateText("The workspace is empty. Create tunnels or load an example config.", width)),
+		groupTitleStyle.Render(m.t("Quick Start", "快速开始")),
+		sectionTextStyle.Render(truncateText(m.t("The workspace is empty. Create tunnels or load an example config.", "当前工作区是空的。创建隧道，或加载一份示例配置。"), width)),
 		"",
-		renderActionLine("i", "seed sample SSH and Kubernetes tunnels", width),
-		renderActionLine("a", "create a starter SSH profile draft", width),
-		renderActionLine("e", "open the YAML config in your editor", width),
-		renderActionLine("r", "reload external config edits", width),
+		renderActionLine("i", m.t("seed sample SSH and Kubernetes tunnels", "写入示例 SSH 和 Kubernetes 隧道"), width),
+		renderActionLine("a", m.t("create a starter SSH profile draft", "创建一个 SSH 配置草稿"), width),
+		renderActionLine("e", m.t("open the YAML config in your editor", "在编辑器里打开 YAML 配置"), width),
+		renderActionLine("r", m.t("reload external config edits", "重新加载外部改动后的配置"), width),
+		renderActionLine("L", m.t("switch between English and Chinese", "在英文和中文之间切换"), width),
 		"",
-		renderCompactKeyValue("Config", m.configPath, width),
+		renderCompactKeyValue(m.t("Config", "配置"), m.configPath, width),
 	}
 }
 
@@ -1711,8 +1746,8 @@ func (m Model) renderProfileStartLines(view app.ProfileView, specErr error, widt
 	}
 
 	lines := []string{
-		groupTitleStyle.Render("Start"),
-		renderCompactKeyValue("Readiness", profileStartSummary(analysis.Status), width),
+		groupTitleStyle.Render(m.t("Start", "启动")),
+		renderCompactKeyValue(m.t("Readiness", "就绪度"), profileStartSummary(m.language(), analysis.Status), width),
 	}
 
 	excludedProblem := ""
@@ -1724,7 +1759,7 @@ func (m Model) renderProfileStartLines(view app.ProfileView, specErr error, widt
 		if excludedProblem != "" && problem == excludedProblem {
 			continue
 		}
-		lines = append(lines, renderCompactKeyValue("Blocker", problem, width))
+		lines = append(lines, renderCompactKeyValue(m.t("Blocker", "阻塞项"), problem, width))
 	}
 
 	return lines
@@ -1741,15 +1776,15 @@ func (m Model) renderStackStartLines(view app.StackView, width int) []string {
 	}
 
 	lines := []string{
-		groupTitleStyle.Render("Start Plan"),
-		renderCompactKeyValue("Readiness", stackStartSummary(view, analysis), width),
-		renderCompactKeyValue("Ready", formatCountNoun(analysis.ReadyCount, "member"), width),
-		renderCompactKeyValue("Running", formatCountNoun(analysis.ActiveCount, "member"), width),
-		renderCompactKeyValue("Blocked", formatCountNoun(analysis.BlockedCount, "member"), width),
+		groupTitleStyle.Render(m.t("Start Plan", "启动计划")),
+		renderCompactKeyValue(m.t("Readiness", "就绪度"), stackStartSummary(m.language(), view, analysis), width),
+		renderCompactKeyValue(m.t("Ready", "可启动"), formatCountNoun(m.language(), analysis.ReadyCount, "member", "members", "个成员"), width),
+		renderCompactKeyValue(m.t("Running", "运行中"), formatCountNoun(m.language(), analysis.ActiveCount, "member", "members", "个成员"), width),
+		renderCompactKeyValue(m.t("Blocked", "已阻塞"), formatCountNoun(m.language(), analysis.BlockedCount, "member", "members", "个成员"), width),
 	}
 
 	if len(view.Stack.Profiles) == 0 {
-		lines = append(lines, renderCompactKeyValue("Blocker", "Add a profile to this stack first.", width))
+		lines = append(lines, renderCompactKeyValue(m.t("Blocker", "阻塞项"), m.t("Add a profile to this stack first.", "先给这个组合添加一个配置。"), width))
 		return lines
 	}
 
@@ -1765,40 +1800,40 @@ func (m Model) renderStackStartLines(view app.StackView, width int) []string {
 	return lines
 }
 
-func profileActionLines(view app.ProfileView, width int) []string {
-	toggleLabel := "start tunnel"
+func (m Model) profileActionLines(view app.ProfileView, width int) []string {
+	toggleLabel := m.t("start tunnel", "启动隧道")
 	if isActiveTunnelStatus(view.State.Status) {
-		toggleLabel = "stop tunnel"
+		toggleLabel = m.t("stop tunnel", "停止隧道")
 	}
 
 	return []string{
 		renderActionLine("Enter", toggleLabel, width),
-		renderActionLine("c", "clone profile draft", width),
-		renderActionLine("A", "create stack draft from profile", width),
-		renderActionLine("e", "edit config file", width),
-		renderActionLine("d", "delete profile", width),
+		renderActionLine("c", m.t("clone profile draft", "克隆配置草稿"), width),
+		renderActionLine("A", m.t("create stack draft from profile", "从配置创建组合草稿"), width),
+		renderActionLine("e", m.t("edit config file", "编辑配置文件"), width),
+		renderActionLine("d", m.t("delete profile", "删除配置"), width),
 	}
 }
 
-func stackActionLines(view app.StackView, width int) []string {
-	toggleLabel := "start stack"
+func (m Model) stackActionLines(view app.StackView, width int) []string {
+	toggleLabel := m.t("start stack", "启动组合")
 	if view.Status == app.StackStatusRunning {
-		toggleLabel = "stop stack"
+		toggleLabel = m.t("stop stack", "停止组合")
 	}
 
 	return []string{
 		renderActionLine("Enter", toggleLabel, width),
-		renderActionLine("c", "clone stack draft", width),
-		renderActionLine("A", "create another stack draft", width),
-		renderActionLine("e", "edit config file", width),
-		renderActionLine("d", "delete stack", width),
+		renderActionLine("c", m.t("clone stack draft", "克隆组合草稿"), width),
+		renderActionLine("A", m.t("create another stack draft", "再创建一个组合草稿"), width),
+		renderActionLine("e", m.t("edit config file", "编辑配置文件"), width),
+		renderActionLine("d", m.t("delete stack", "删除组合"), width),
 	}
 }
 
-func starterSSHProfileDraft(cfg domain.Config) domain.Profile {
+func starterSSHProfileDraft(cfg domain.Config, language domain.Language) domain.Profile {
 	return domain.Profile{
 		Name:        nextProfileDraftName(cfg, "draft-ssh"),
-		Description: "Starter SSH tunnel draft. Update the target before using it.",
+		Description: translate(language, "Starter SSH tunnel draft. Update the target before using it.", "SSH 隧道草稿模板。使用前请先改成你的目标地址。"),
 		Type:        domain.TunnelTypeSSHLocal,
 		LocalPort:   nextAvailableLocalPort(cfg, 15432),
 		Restart: domain.RestartPolicy{
@@ -1816,22 +1851,22 @@ func starterSSHProfileDraft(cfg domain.Config) domain.Profile {
 	}
 }
 
-func starterStackDraft(cfg domain.Config, profiles []app.ProfileView, stacks []app.StackView, focus listFocus, selectedProfile, selectedStack int, filterQuery string) (domain.Stack, error) {
-	members, sourceLabel, err := starterStackMembers(profiles, stacks, focus, selectedProfile, selectedStack, filterQuery, len(cfg.Profiles))
+func starterStackDraft(cfg domain.Config, profiles []app.ProfileView, stacks []app.StackView, focus listFocus, selectedProfile, selectedStack int, filterQuery string, language domain.Language) (domain.Stack, error) {
+	members, sourceLabel, err := starterStackMembers(profiles, stacks, focus, selectedProfile, selectedStack, filterQuery, len(cfg.Profiles), language)
 	if err != nil {
 		return domain.Stack{}, err
 	}
 
 	stack := domain.Stack{
 		Name:        nextStackDraftName(cfg, "draft-stack"),
-		Description: fmt.Sprintf("Starter stack draft seeded from %s.", sourceLabel),
+		Description: translatef(language, "Starter stack draft seeded from %s.", "组合草稿模板，来源于 %s。", sourceLabel),
 		Labels:      []string{"draft"},
 		Profiles:    members,
 	}
 	return stack, nil
 }
 
-func starterStackMembers(profiles []app.ProfileView, stacks []app.StackView, focus listFocus, selectedProfile, selectedStack int, filterQuery string, totalProfiles int) ([]string, string, error) {
+func starterStackMembers(profiles []app.ProfileView, stacks []app.StackView, focus listFocus, selectedProfile, selectedStack int, filterQuery string, totalProfiles int, language domain.Language) ([]string, string, error) {
 	if focus == focusStacks && len(stacks) > 0 {
 		selectedStack = max(0, min(selectedStack, len(stacks)-1))
 		selected := stacks[selectedStack]
@@ -1840,24 +1875,24 @@ func starterStackMembers(profiles []app.ProfileView, stacks []app.StackView, foc
 			members = append(members, member.Profile.Name)
 		}
 		if len(members) == 0 {
-			return nil, "", fmt.Errorf("Selected stack has no resolved members to draft from.")
+			return nil, "", fmt.Errorf("%s", translate(language, "Selected stack has no resolved members to draft from.", "当前选中的组合没有可用于生成草稿的已解析成员。"))
 		}
-		return members, "stack " + selected.Stack.Name, nil
+		return members, translatef(language, "stack %s", "组合 %s", selected.Stack.Name), nil
 	}
 
 	if len(profiles) > 0 {
 		selectedProfile = max(0, min(selectedProfile, len(profiles)-1))
 		selected := profiles[selectedProfile]
-		return []string{selected.Profile.Name}, "profile " + selected.Profile.Name, nil
+		return []string{selected.Profile.Name}, translatef(language, "profile %s", "配置 %s", selected.Profile.Name), nil
 	}
 
 	switch {
 	case totalProfiles == 0:
-		return nil, "", fmt.Errorf("Add a profile first, then press A to create a stack draft.")
+		return nil, "", fmt.Errorf("%s", translate(language, "Add a profile first, then press A to create a stack draft.", "请先添加一个配置，然后按 A 创建组合草稿。"))
 	case filterQuery != "":
-		return nil, "", fmt.Errorf("No visible profile to seed the stack. Clear the filter or select a profile first.")
+		return nil, "", fmt.Errorf("%s", translate(language, "No visible profile to seed the stack. Clear the filter or select a profile first.", "当前没有可用于生成组合的可见配置。请清除筛选，或先选中一个配置。"))
 	default:
-		return nil, "", fmt.Errorf("Select a profile first, then press A to create a stack draft.")
+		return nil, "", fmt.Errorf("%s", translate(language, "Select a profile first, then press A to create a stack draft.", "请先选中一个配置，然后按 A 创建组合草稿。"))
 	}
 }
 
@@ -2173,41 +2208,41 @@ func renderSizedBlock(style lipgloss.Style, width int, body string) string {
 	return style.Render(lipgloss.NewStyle().Width(innerWidth).Render(body))
 }
 
-func renderStatusBadge(status domain.TunnelStatus) string {
-	label := "STOP"
+func renderStatusBadge(language domain.Language, status domain.TunnelStatus) string {
+	label := translate(language, "STOP", "停止")
 	background := lipgloss.Color("240")
 
 	switch status {
 	case domain.TunnelStatusRunning:
-		label = "RUN"
+		label = translate(language, "RUN", "运行")
 		background = lipgloss.Color("29")
 	case domain.TunnelStatusStarting:
-		label = "START"
+		label = translate(language, "START", "启动")
 		background = lipgloss.Color("31")
 	case domain.TunnelStatusRestarting:
-		label = "RETRY"
+		label = translate(language, "RETRY", "重试")
 		background = lipgloss.Color("136")
 	case domain.TunnelStatusFailed:
-		label = "FAIL"
+		label = translate(language, "FAIL", "失败")
 		background = lipgloss.Color("124")
 	case domain.TunnelStatusExited:
-		label = "EXIT"
+		label = translate(language, "EXIT", "退出")
 		background = lipgloss.Color("239")
 	}
 
 	return renderStateBadge(label, background)
 }
 
-func renderStackStatusBadge(status app.StackStatus) string {
-	label := "STOP"
+func renderStackStatusBadge(language domain.Language, status app.StackStatus) string {
+	label := translate(language, "STOP", "停止")
 	background := lipgloss.Color("240")
 
 	switch status {
 	case app.StackStatusRunning:
-		label = "RUN"
+		label = translate(language, "RUN", "运行")
 		background = lipgloss.Color("29")
 	case app.StackStatusPartial:
-		label = "PART"
+		label = translate(language, "PART", "部分")
 		background = lipgloss.Color("136")
 	}
 
@@ -2240,89 +2275,6 @@ func renderLogSourceBadge(source domain.LogSource) string {
 	return style.Render(label)
 }
 
-func humanTunnelStatus(status domain.TunnelStatus) string {
-	switch status {
-	case domain.TunnelStatusRunning:
-		return "Running"
-	case domain.TunnelStatusStarting:
-		return "Starting"
-	case domain.TunnelStatusRestarting:
-		return "Restarting"
-	case domain.TunnelStatusFailed:
-		return "Failed"
-	case domain.TunnelStatusExited:
-		return "Exited"
-	default:
-		return "Stopped"
-	}
-}
-
-func humanStackStatus(status app.StackStatus) string {
-	switch status {
-	case app.StackStatusRunning:
-		return "Running"
-	case app.StackStatusPartial:
-		return "Partially Active"
-	default:
-		return "Stopped"
-	}
-}
-
-func humanTunnelType(kind domain.TunnelType) string {
-	switch kind {
-	case domain.TunnelTypeSSHLocal:
-		return "SSH local forward"
-	case domain.TunnelTypeKubernetesPortForward:
-		return "Kubernetes port-forward"
-	default:
-		return string(kind)
-	}
-}
-
-func profileTarget(profile domain.Profile) string {
-	switch profile.Type {
-	case domain.TunnelTypeSSHLocal:
-		if profile.SSH == nil {
-			return "SSH target not configured"
-		}
-		return fmt.Sprintf("%s -> %s:%d", profile.SSH.Host, profile.SSH.RemoteHost, profile.SSH.RemotePort)
-	case domain.TunnelTypeKubernetesPortForward:
-		if profile.Kubernetes == nil {
-			return "Kubernetes target not configured"
-		}
-
-		parts := make([]string, 0, 3)
-		if profile.Kubernetes.Context != "" {
-			parts = append(parts, profile.Kubernetes.Context)
-		}
-		if profile.Kubernetes.Namespace != "" {
-			parts = append(parts, profile.Kubernetes.Namespace)
-		}
-		parts = append(parts, fmt.Sprintf(
-			"%s/%s:%d",
-			profile.Kubernetes.ResourceType,
-			profile.Kubernetes.Resource,
-			profile.Kubernetes.RemotePort,
-		))
-		return strings.Join(parts, " • ")
-	default:
-		return "Unknown target"
-	}
-}
-
-func stackMembersSummary(view app.StackView) string {
-	if len(view.Members) == 0 {
-		return "no members"
-	}
-
-	names := make([]string, 0, len(view.Members))
-	for _, member := range view.Members {
-		names = append(names, member.Profile.Name)
-	}
-
-	return strings.Join(names, ", ")
-}
-
 func missingStackProfiles(view app.StackView) []string {
 	resolved := make(map[string]struct{}, len(view.Members))
 	for _, member := range view.Members {
@@ -2340,41 +2292,6 @@ func missingStackProfiles(view app.StackView) []string {
 	return missing
 }
 
-func profileStartSummary(status app.StartReadiness) string {
-	switch status {
-	case app.StartReadinessActive:
-		return "Running now"
-	case app.StartReadinessReady:
-		return "Ready on Enter"
-	case app.StartReadinessBlocked:
-		return "Blocked"
-	default:
-		return "-"
-	}
-}
-
-func stackStartSummary(view app.StackView, analysis app.StackStartAnalysis) string {
-	switch {
-	case len(view.Stack.Profiles) == 0:
-		return "Blocked"
-	case analysis.BlockedCount > 0:
-		return "Blocked"
-	case analysis.ReadyCount > 0:
-		return "Ready for " + formatCountNoun(analysis.ReadyCount, "member")
-	case analysis.ActiveCount > 0:
-		return "Already running"
-	default:
-		return "Idle"
-	}
-}
-
-func formatCountNoun(count int, noun string) string {
-	if count == 1 {
-		return fmt.Sprintf("%d %s", count, noun)
-	}
-	return fmt.Sprintf("%d %ss", count, noun)
-}
-
 func formatPID(pid int) string {
 	if pid == 0 {
 		return "-"
@@ -2387,48 +2304,6 @@ func formatUptime(startedAt *time.Time, now time.Time) string {
 		return "-"
 	}
 	return humanizeDuration(now.Sub(*startedAt))
-}
-
-func formatLastExit(state domain.RuntimeState, now time.Time) string {
-	parts := make([]string, 0, 3)
-
-	if state.ExitReason != "" {
-		parts = append(parts, state.ExitReason)
-	}
-	if state.ExitedAt != nil {
-		parts = append(parts, humanizeDuration(now.Sub(*state.ExitedAt))+" ago")
-	}
-	if state.ExitedAt != nil || state.LastExitCode != 0 {
-		parts = append(parts, fmt.Sprintf("code %d", state.LastExitCode))
-	}
-
-	if len(parts) == 0 {
-		return "-"
-	}
-	return strings.Join(parts, " • ")
-}
-
-func restartPolicySummary(policy domain.RestartPolicy) string {
-	if !policy.Enabled {
-		return "disabled"
-	}
-
-	maxRetries := "unlimited retries"
-	if policy.MaxRetries > 0 {
-		maxRetries = fmt.Sprintf("%d retries", policy.MaxRetries)
-	}
-
-	initialBackoff := policy.InitialBackoff
-	if initialBackoff == "" {
-		initialBackoff = "2s"
-	}
-
-	maxBackoff := policy.MaxBackoff
-	if maxBackoff == "" {
-		maxBackoff = "30s"
-	}
-
-	return fmt.Sprintf("%s, %s to %s", maxRetries, initialBackoff, maxBackoff)
 }
 
 func humanizeDuration(duration time.Duration) string {
@@ -2511,8 +2386,8 @@ func profileSearchText(view app.ProfileView) string {
 		view.Profile.Name,
 		view.Profile.Description,
 		string(view.Profile.Type),
-		humanTunnelType(view.Profile.Type),
-		profileTarget(view.Profile),
+		humanTunnelType(domain.LanguageEnglish, view.Profile.Type),
+		profileTarget(domain.LanguageEnglish, view.Profile),
 		fmt.Sprintf("%d", view.Profile.LocalPort),
 	}
 	parts = append(parts, view.Profile.Labels...)
@@ -2524,7 +2399,7 @@ func stackSearchText(view app.StackView) string {
 		view.Stack.Name,
 		view.Stack.Description,
 		string(view.Status),
-		humanStackStatus(view.Status),
+		humanStackStatus(domain.LanguageEnglish, view.Status),
 	}
 	parts = append(parts, view.Stack.Labels...)
 
@@ -2532,7 +2407,7 @@ func stackSearchText(view app.StackView) string {
 		parts = append(parts,
 			member.Profile.Name,
 			member.Profile.Description,
-			profileTarget(member.Profile),
+			profileTarget(domain.LanguageEnglish, member.Profile),
 			fmt.Sprintf("%d", member.Profile.LocalPort),
 		)
 		parts = append(parts, member.Profile.Labels...)
@@ -2552,17 +2427,21 @@ func formatVisibleCount(visible, total int) string {
 	return fmt.Sprintf("%d/%d", visible, total)
 }
 
-func profileDeleteNotice(result app.RemoveProfileResult) string {
-	parts := []string{fmt.Sprintf("Removed profile %s.", result.Name)}
+func profileDeleteNotice(language domain.Language, result app.RemoveProfileResult) string {
+	parts := []string{translatef(language, "Removed profile %s.", "已移除配置 %s。", result.Name)}
 	if result.WasActive {
-		parts = append(parts, "Stopped the running tunnel first.")
+		parts = append(parts, translate(language, "Stopped the running tunnel first.", "已先停止正在运行的隧道。"))
 	}
 	if result.UpdatedStacks > 0 {
-		impact := fmt.Sprintf("Pruned %d stack references", result.UpdatedStacks)
+		impact := translatef(language, "Pruned %d stack references", "已裁剪 %d 处组合引用", result.UpdatedStacks)
 		if result.RemovedStacks > 0 {
-			impact += fmt.Sprintf(" and removed %d empty stacks", result.RemovedStacks)
+			impact += translatef(language, " and removed %d empty stacks", "，并移除 %d 个空组合", result.RemovedStacks)
 		}
-		parts = append(parts, impact+".")
+		if language == domain.LanguageSimplifiedChinese {
+			parts = append(parts, impact+"。")
+		} else {
+			parts = append(parts, impact+".")
+		}
 	}
 
 	return strings.Join(parts, " ")

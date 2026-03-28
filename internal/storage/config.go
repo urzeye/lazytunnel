@@ -77,7 +77,8 @@ func SaveConfig(path string, cfg domain.Config) error {
 
 func SampleConfig() domain.Config {
 	return domain.Config{
-		Version: domain.CurrentConfigVersion,
+		Version:  domain.CurrentConfigVersion,
+		Language: domain.LanguageEnglish,
 		Profiles: []domain.Profile{
 			{
 				Name:        "prod-db",

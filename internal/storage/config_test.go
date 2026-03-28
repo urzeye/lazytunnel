@@ -19,6 +19,9 @@ func TestLoadConfigReturnsDefaultWhenFileDoesNotExist(t *testing.T) {
 	if cfg.Version != domain.CurrentConfigVersion {
 		t.Fatalf("expected default version %d, got %d", domain.CurrentConfigVersion, cfg.Version)
 	}
+	if cfg.Language != domain.LanguageEnglish {
+		t.Fatalf("expected default language %q, got %q", domain.LanguageEnglish, cfg.Language)
+	}
 }
 
 func TestLoadConfigParsesExampleConfig(t *testing.T) {
@@ -35,6 +38,9 @@ func TestLoadConfigParsesExampleConfig(t *testing.T) {
 
 	if got, want := len(cfg.Stacks), 1; got != want {
 		t.Fatalf("expected %d stack, got %d", want, got)
+	}
+	if cfg.Language != domain.LanguageEnglish {
+		t.Fatalf("expected example language %q, got %q", domain.LanguageEnglish, cfg.Language)
 	}
 }
 

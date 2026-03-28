@@ -10,6 +10,18 @@ import (
 
 const CurrentConfigVersion = 1
 
+type Language string
+
+const (
+	LanguageEnglish           Language = "en"
+	LanguageSimplifiedChinese Language = "zh-CN"
+)
+
+var supportedLanguages = []Language{
+	LanguageEnglish,
+	LanguageSimplifiedChinese,
+}
+
 type TunnelType string
 
 const (
@@ -24,6 +36,7 @@ var supportedTunnelTypes = []TunnelType{
 
 type Config struct {
 	Version  int       `yaml:"version"`
+	Language Language  `yaml:"language"`
 	Profiles []Profile `yaml:"profiles"`
 	Stacks   []Stack   `yaml:"stacks"`
 }
@@ -68,7 +81,10 @@ type Stack struct {
 }
 
 func DefaultConfig() Config {
-	return Config{Version: CurrentConfigVersion}
+	return Config{
+		Version:  CurrentConfigVersion,
+		Language: LanguageEnglish,
+	}
 }
 
 func (c *Config) SetProfile(profile Profile) (created bool) {
@@ -198,13 +214,21 @@ func (c *Config) Normalize() {
 	if c.Version == 0 {
 		c.Version = CurrentConfigVersion
 	}
+	if c.Language == "" {
+		c.Language = LanguageEnglish
+	}
 }
 
 func (c Config) Validate() error {
+	c.Normalize()
+
 	var errs []error
 
 	if c.Version != CurrentConfigVersion {
 		errs = append(errs, fmt.Errorf("unsupported config version %d", c.Version))
+	}
+	if !slices.Contains(supportedLanguages, c.Language) {
+		errs = append(errs, fmt.Errorf("unsupported language %q", c.Language))
 	}
 
 	profileNames := make(map[string]struct{}, len(c.Profiles))

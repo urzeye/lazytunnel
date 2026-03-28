@@ -51,7 +51,7 @@ func TestProfileTarget(t *testing.T) {
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			if got := profileTarget(tt.profile); got != tt.want {
+			if got := profileTarget(domain.LanguageEnglish, tt.profile); got != tt.want {
 				t.Fatalf("profileTarget() = %q, want %q", got, tt.want)
 			}
 		})
@@ -143,6 +143,47 @@ func TestRenderStackDetailLinesShowsMissingProfiles(t *testing.T) {
 	}
 	if !strings.Contains(rendered, "missing-api") {
 		t.Fatalf("expected missing profile name, got %q", rendered)
+	}
+}
+
+func TestRenderProfileDetailLinesUsesChineseWhenConfigured(t *testing.T) {
+	t.Parallel()
+
+	service, err := app.NewService(domain.Config{
+		Version:  domain.CurrentConfigVersion,
+		Language: domain.LanguageSimplifiedChinese,
+		Profiles: []domain.Profile{
+			{
+				Name:      "api-debug",
+				Type:      domain.TunnelTypeKubernetesPortForward,
+				LocalPort: 8080,
+				Restart: domain.RestartPolicy{
+					Enabled: true,
+				},
+				Kubernetes: &domain.Kubernetes{
+					Context:      "dev-cluster",
+					Namespace:    "backend",
+					ResourceType: "service",
+					Resource:     "api",
+					RemotePort:   80,
+				},
+			},
+		},
+	}, newStubRuntimeController())
+	if err != nil {
+		t.Fatalf("new service: %v", err)
+	}
+
+	model := Model{
+		service: service,
+		now:     time.Date(2026, 3, 28, 11, 0, 0, 0, time.UTC),
+	}
+
+	rendered := strings.Join(model.renderProfileDetailLines(service.ProfileViews()[0], 80), "\n")
+	for _, snippet := range []string{"概览", "运行态", "就绪度", "命令"} {
+		if !strings.Contains(rendered, snippet) {
+			t.Fatalf("expected %q in Chinese detail view, got %q", snippet, rendered)
+		}
 	}
 }
 
@@ -306,13 +347,13 @@ func TestRenderInspectorTabsShowsKeyHints(t *testing.T) {
 func TestRenderStatusBadgeUsesReadableWords(t *testing.T) {
 	t.Parallel()
 
-	if got := renderStatusBadge(domain.TunnelStatusStopped); !strings.Contains(got, "STOP") {
+	if got := renderStatusBadge(domain.LanguageEnglish, domain.TunnelStatusStopped); !strings.Contains(got, "STOP") {
 		t.Fatalf("expected STOP badge, got %q", got)
 	}
-	if got := renderStatusBadge(domain.TunnelStatusRestarting); !strings.Contains(got, "RETRY") {
+	if got := renderStatusBadge(domain.LanguageEnglish, domain.TunnelStatusRestarting); !strings.Contains(got, "RETRY") {
 		t.Fatalf("expected RETRY badge, got %q", got)
 	}
-	if got := renderStatusBadge(domain.TunnelStatusStarting); !strings.Contains(got, "START") {
+	if got := renderStatusBadge(domain.LanguageEnglish, domain.TunnelStatusStarting); !strings.Contains(got, "START") {
 		t.Fatalf("expected START badge, got %q", got)
 	}
 }
@@ -320,10 +361,10 @@ func TestRenderStatusBadgeUsesReadableWords(t *testing.T) {
 func TestRenderStackStatusBadgeUsesReadableWords(t *testing.T) {
 	t.Parallel()
 
-	if got := renderStackStatusBadge(app.StackStatusStopped); !strings.Contains(got, "STOP") {
+	if got := renderStackStatusBadge(domain.LanguageEnglish, app.StackStatusStopped); !strings.Contains(got, "STOP") {
 		t.Fatalf("expected STOP stack badge, got %q", got)
 	}
-	if got := renderStackStatusBadge(app.StackStatusPartial); !strings.Contains(got, "PART") {
+	if got := renderStackStatusBadge(domain.LanguageEnglish, app.StackStatusPartial); !strings.Contains(got, "PART") {
 		t.Fatalf("expected PART stack badge, got %q", got)
 	}
 }
@@ -340,7 +381,7 @@ func TestFormatLastExit(t *testing.T) {
 		LastExitCode: 0,
 	}
 
-	got := formatLastExit(state, now)
+	got := formatLastExit(domain.LanguageEnglish, state, now)
 	want := "stopped by user • 42s ago • code 0"
 	if got != want {
 		t.Fatalf("formatLastExit() = %q, want %q", got, want)
@@ -842,6 +883,45 @@ func TestReloadConfigFromDiskReplacesServiceConfig(t *testing.T) {
 	}
 	if got := len(model.service.StackViews()); got != 1 {
 		t.Fatalf("expected 1 reloaded stack, got %d", got)
+	}
+}
+
+func TestToggleLanguagePersistsAndReloadsServiceConfig(t *testing.T) {
+	t.Parallel()
+
+	configPath := filepath.Join(t.TempDir(), "config.yaml")
+	if err := storage.SaveConfig(configPath, storage.SampleConfig()); err != nil {
+		t.Fatalf("save config: %v", err)
+	}
+
+	service, err := app.NewService(storage.SampleConfig(), newStubRuntimeController())
+	if err != nil {
+		t.Fatalf("new service: %v", err)
+	}
+
+	model := Model{
+		service:    service,
+		configPath: configPath,
+	}
+
+	model = model.toggleLanguage()
+
+	if model.lastError != "" {
+		t.Fatalf("expected no error, got %q", model.lastError)
+	}
+	if got := model.service.Config().Language; got != domain.LanguageSimplifiedChinese {
+		t.Fatalf("expected service language zh-CN, got %q", got)
+	}
+	if !strings.Contains(model.lastNotice, "简体中文") {
+		t.Fatalf("expected switch notice to mention Chinese, got %q", model.lastNotice)
+	}
+
+	cfg, err := storage.LoadConfig(configPath)
+	if err != nil {
+		t.Fatalf("load config: %v", err)
+	}
+	if cfg.Language != domain.LanguageSimplifiedChinese {
+		t.Fatalf("expected persisted language zh-CN, got %q", cfg.Language)
 	}
 }
 
