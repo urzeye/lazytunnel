@@ -20,8 +20,88 @@ func newStackCommand(configPath *string) *cobra.Command {
 		newStackListCommand(configPath),
 		newStackAddCommand(configPath),
 		newStackCloneCommand(configPath),
+		newStackEditCommand(configPath),
 		newStackRemoveCommand(configPath),
 	)
+
+	return cmd
+}
+
+func newStackEditCommand(configPath *string) *cobra.Command {
+	var (
+		name        string
+		description string
+		labels      []string
+		profiles    []string
+		clearLabels bool
+	)
+
+	cmd := &cobra.Command{
+		Use:     "edit <name>",
+		Aliases: []string{"update", "set"},
+		Short:   "Edit an existing stack in place",
+		Args:    cobra.ExactArgs(1),
+		RunE: func(cmd *cobra.Command, args []string) error {
+			sourceName := strings.TrimSpace(args[0])
+
+			cfg, err := storage.LoadConfig(*configPath)
+			if err != nil {
+				return fmt.Errorf("load config: %w", err)
+			}
+
+			source, exists := findStack(cfg.Stacks, sourceName)
+			if !exists {
+				return fmt.Errorf("stack %q not found", sourceName)
+			}
+
+			stack := cloneStack(source)
+			targetName := source.Name
+			if cmd.Flags().Changed("name") {
+				targetName = strings.TrimSpace(name)
+				stack.Name = targetName
+			}
+			if cmd.Flags().Changed("description") {
+				stack.Description = description
+			}
+			if clearLabels {
+				stack.Labels = nil
+			}
+			if cmd.Flags().Changed("label") {
+				stack.Labels = cleanList(labels)
+			}
+			if cmd.Flags().Changed("profile") {
+				stack.Profiles = cleanList(profiles)
+			}
+
+			if targetName != sourceName {
+				if _, exists := findStack(cfg.Stacks, targetName); exists {
+					return fmt.Errorf("stack %q already exists", targetName)
+				}
+				if !cfg.RemoveStack(sourceName) {
+					return fmt.Errorf("stack %q not found", sourceName)
+				}
+			}
+
+			cfg.SetStack(stack)
+			if err := storage.SaveConfig(*configPath, cfg); err != nil {
+				return fmt.Errorf("save config: %w", err)
+			}
+
+			if targetName != sourceName {
+				_, _ = fmt.Fprintf(cmd.OutOrStdout(), "updated stack %s (renamed from %s)\n", targetName, sourceName)
+				return nil
+			}
+
+			_, _ = fmt.Fprintf(cmd.OutOrStdout(), "updated stack %s\n", targetName)
+			return nil
+		},
+	}
+
+	cmd.Flags().StringVar(&name, "name", "", "rename the stack")
+	cmd.Flags().StringVar(&description, "description", "", "update the stack description")
+	cmd.Flags().StringSliceVar(&labels, "label", nil, "replace labels on the stack")
+	cmd.Flags().StringSliceVar(&profiles, "profile", nil, "replace the member profile list on the stack")
+	cmd.Flags().BoolVar(&clearLabels, "clear-labels", false, "remove all labels before applying label overrides")
 
 	return cmd
 }

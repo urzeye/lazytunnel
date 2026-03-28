@@ -250,6 +250,116 @@ func TestProfileCloneCopiesProfileWithOverrides(t *testing.T) {
 	}
 }
 
+func TestProfileEditRenamesProfileAndUpdatesStackReferences(t *testing.T) {
+	t.Parallel()
+
+	configPath := filepath.Join(t.TempDir(), "config.yaml")
+	if err := storage.SaveConfig(configPath, storage.SampleConfig()); err != nil {
+		t.Fatalf("save config: %v", err)
+	}
+
+	output := executeCommand(t,
+		"--config", configPath,
+		"profile", "edit", "prod-db",
+		"--name", "staging-db",
+		"--local-port", "15432",
+		"--description", "Staging database tunnel",
+	)
+
+	if !strings.Contains(output, "updated profile staging-db (renamed from prod-db)") {
+		t.Fatalf("unexpected output: %q", output)
+	}
+
+	cfg, err := storage.LoadConfig(configPath)
+	if err != nil {
+		t.Fatalf("load config: %v", err)
+	}
+
+	if _, exists := findProfile(cfg.Profiles, "prod-db"); exists {
+		t.Fatal("expected old profile name to be removed")
+	}
+
+	edited, exists := findProfile(cfg.Profiles, "staging-db")
+	if !exists {
+		t.Fatal("expected renamed profile to exist")
+	}
+	if edited.LocalPort != 15432 {
+		t.Fatalf("expected edited local port 15432, got %d", edited.LocalPort)
+	}
+	if got := strings.Join(cfg.Stacks[0].Profiles, ","); got != "staging-db,api-debug" {
+		t.Fatalf("expected stack references to be updated, got %q", got)
+	}
+}
+
+func TestProfileEditUpdatesKubernetesFields(t *testing.T) {
+	t.Parallel()
+
+	configPath := filepath.Join(t.TempDir(), "config.yaml")
+	if err := storage.SaveConfig(configPath, storage.SampleConfig()); err != nil {
+		t.Fatalf("save config: %v", err)
+	}
+
+	output := executeCommand(t,
+		"--config", configPath,
+		"profile", "edit", "api-debug",
+		"--context", "staging-cluster",
+		"--namespace", "payments",
+		"--resource-type", "deployment",
+		"--resource", "api-v2",
+		"--remote-port", "8081",
+		"--clear-labels",
+		"--label", "staging",
+	)
+
+	if !strings.Contains(output, "updated profile api-debug") {
+		t.Fatalf("unexpected output: %q", output)
+	}
+
+	cfg, err := storage.LoadConfig(configPath)
+	if err != nil {
+		t.Fatalf("load config: %v", err)
+	}
+
+	edited, exists := findProfile(cfg.Profiles, "api-debug")
+	if !exists {
+		t.Fatal("expected edited profile to exist")
+	}
+	if edited.Kubernetes == nil {
+		t.Fatal("expected kubernetes settings to exist")
+	}
+	if edited.Kubernetes.Context != "staging-cluster" || edited.Kubernetes.Namespace != "payments" {
+		t.Fatalf("unexpected kubernetes location: %#v", edited.Kubernetes)
+	}
+	if edited.Kubernetes.ResourceType != "deployment" || edited.Kubernetes.Resource != "api-v2" || edited.Kubernetes.RemotePort != 8081 {
+		t.Fatalf("unexpected kubernetes target: %#v", edited.Kubernetes)
+	}
+	if got := strings.Join(edited.Labels, ","); got != "staging" {
+		t.Fatalf("unexpected labels: %q", got)
+	}
+}
+
+func TestProfileEditRejectsWrongFamilyFlags(t *testing.T) {
+	t.Parallel()
+
+	configPath := filepath.Join(t.TempDir(), "config.yaml")
+	if err := storage.SaveConfig(configPath, storage.SampleConfig()); err != nil {
+		t.Fatalf("save config: %v", err)
+	}
+
+	_, err := executeCommandErr(t,
+		"--config", configPath,
+		"profile", "edit", "prod-db",
+		"--context", "dev-cluster",
+	)
+	if err == nil {
+		t.Fatal("expected edit command to fail")
+	}
+
+	if !strings.Contains(err.Error(), "kubernetes-specific flags") {
+		t.Fatalf("unexpected error: %v", err)
+	}
+}
+
 func TestProfileRemoveRejectsReferencedProfileWithoutFlag(t *testing.T) {
 	t.Parallel()
 
@@ -380,6 +490,52 @@ func TestStackCloneCopiesMembersWithOverrides(t *testing.T) {
 		t.Fatalf("unexpected profiles: %q", got)
 	}
 	if got := strings.Join(cloned.Labels, ","); got != "staging" {
+		t.Fatalf("unexpected labels: %q", got)
+	}
+}
+
+func TestStackEditRenamesAndReplacesMembers(t *testing.T) {
+	t.Parallel()
+
+	configPath := filepath.Join(t.TempDir(), "config.yaml")
+	if err := storage.SaveConfig(configPath, storage.SampleConfig()); err != nil {
+		t.Fatalf("save config: %v", err)
+	}
+
+	output := executeCommand(t,
+		"--config", configPath,
+		"stack", "edit", "backend-dev",
+		"--name", "backend-staging",
+		"--description", "Staging backend stack",
+		"--profile", "api-debug",
+		"--clear-labels",
+		"--label", "staging",
+	)
+
+	if !strings.Contains(output, "updated stack backend-staging (renamed from backend-dev)") {
+		t.Fatalf("unexpected output: %q", output)
+	}
+
+	cfg, err := storage.LoadConfig(configPath)
+	if err != nil {
+		t.Fatalf("load config: %v", err)
+	}
+
+	if _, exists := findStack(cfg.Stacks, "backend-dev"); exists {
+		t.Fatal("expected old stack name to be removed")
+	}
+
+	edited, exists := findStack(cfg.Stacks, "backend-staging")
+	if !exists {
+		t.Fatal("expected edited stack to exist")
+	}
+	if edited.Description != "Staging backend stack" {
+		t.Fatalf("unexpected description: %q", edited.Description)
+	}
+	if got := strings.Join(edited.Profiles, ","); got != "api-debug" {
+		t.Fatalf("unexpected profiles: %q", got)
+	}
+	if got := strings.Join(edited.Labels, ","); got != "staging" {
 		t.Fatalf("unexpected labels: %q", got)
 	}
 }

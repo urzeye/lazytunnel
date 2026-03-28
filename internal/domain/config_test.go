@@ -242,3 +242,25 @@ func TestConfigStacksReferencingProfileListsMatches(t *testing.T) {
 		t.Fatalf("expected %v, got %v", want, got)
 	}
 }
+
+func TestConfigRenameProfileInStacksRewritesReferences(t *testing.T) {
+	t.Parallel()
+
+	cfg := DefaultConfig()
+	cfg.Stacks = []Stack{
+		{Name: "backend", Profiles: []string{"prod-db", "api-debug"}},
+		{Name: "ops", Profiles: []string{"prod-db"}},
+	}
+
+	updated := cfg.RenameProfileInStacks("prod-db", "staging-db")
+	if updated != 2 {
+		t.Fatalf("expected 2 updated stacks, got %d", updated)
+	}
+
+	if got := strings.Join(cfg.Stacks[0].Profiles, ","); got != "staging-db,api-debug" {
+		t.Fatalf("unexpected backend profiles: %q", got)
+	}
+	if got := strings.Join(cfg.Stacks[1].Profiles, ","); got != "staging-db" {
+		t.Fatalf("unexpected ops profiles: %q", got)
+	}
+}

@@ -100,6 +100,15 @@ lazytunnel profile clone prod-db \
   --description "Staging database tunnel"
 ```
 
+Edit a saved profile in place:
+
+```bash
+lazytunnel profile edit staging-db \
+  --remote-host staging-db.internal \
+  --label staging \
+  --label db
+```
+
 Validate your config:
 
 ```bash
@@ -122,7 +131,7 @@ LazyTunnel is designed around a few strong workflows:
 - group multiple tunnels into a stack and start them together
 - filter profiles and stacks by name, label, target, and port
 - detect local port conflicts before startup
-- manage config from the CLI with add, clone, and remove commands
+- manage config from the CLI with add, clone, edit, and remove commands
 - delete profiles and stacks directly from the TUI with confirmation
 
 ## Supported Workflows

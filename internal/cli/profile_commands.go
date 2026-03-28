@@ -20,8 +20,77 @@ func newProfileCommand(configPath *string) *cobra.Command {
 		newProfileListCommand(configPath),
 		newProfileAddCommand(configPath),
 		newProfileCloneCommand(configPath),
+		newProfileEditCommand(configPath),
 		newProfileRemoveCommand(configPath),
 	)
+
+	return cmd
+}
+
+func newProfileEditCommand(configPath *string) *cobra.Command {
+	var opts editProfileOptions
+
+	cmd := &cobra.Command{
+		Use:     "edit <name>",
+		Aliases: []string{"update", "set"},
+		Short:   "Edit an existing tunnel profile in place",
+		Args:    cobra.ExactArgs(1),
+		RunE: func(cmd *cobra.Command, args []string) error {
+			sourceName := strings.TrimSpace(args[0])
+
+			cfg, err := storage.LoadConfig(*configPath)
+			if err != nil {
+				return fmt.Errorf("load config: %w", err)
+			}
+
+			source, exists := findProfile(cfg.Profiles, sourceName)
+			if !exists {
+				return fmt.Errorf("profile %q not found", sourceName)
+			}
+
+			profile := cloneProfile(source)
+			targetName := source.Name
+			if cmd.Flags().Changed("name") {
+				targetName = strings.TrimSpace(opts.name)
+				profile.Name = targetName
+			}
+
+			if err := applyProfileEditFlags(cmd, &profile, opts); err != nil {
+				return err
+			}
+
+			if targetName != sourceName {
+				if _, exists := findProfile(cfg.Profiles, targetName); exists {
+					return fmt.Errorf("profile %q already exists", targetName)
+				}
+			}
+
+			if targetName != sourceName {
+				if !cfg.RemoveProfile(sourceName) {
+					return fmt.Errorf("profile %q not found", sourceName)
+				}
+			}
+
+			cfg.SetProfile(profile)
+			if targetName != sourceName {
+				cfg.RenameProfileInStacks(sourceName, targetName)
+			}
+
+			if err := storage.SaveConfig(*configPath, cfg); err != nil {
+				return fmt.Errorf("save config: %w", err)
+			}
+
+			if targetName != sourceName {
+				_, _ = fmt.Fprintf(cmd.OutOrStdout(), "updated profile %s (renamed from %s)\n", targetName, sourceName)
+				return nil
+			}
+
+			_, _ = fmt.Fprintf(cmd.OutOrStdout(), "updated profile %s\n", targetName)
+			return nil
+		},
+	}
+
+	bindEditProfileFlags(cmd, &opts)
 
 	return cmd
 }
@@ -327,6 +396,25 @@ type addKubernetesOptions struct {
 	remotePort   int
 }
 
+type editProfileOptions struct {
+	name           string
+	description    string
+	localPort      int
+	labels         []string
+	clearLabels    bool
+	restartEnabled bool
+	maxRetries     int
+	initialBackoff string
+	maxBackoff     string
+	host           string
+	remoteHost     string
+	remotePort     int
+	context        string
+	namespace      string
+	resourceType   string
+	resource       string
+}
+
 func bindCommonProfileFlags(cmd *cobra.Command, opts *profileOptions) {
 	cmd.Flags().StringVar(&opts.name, "name", "", "profile name")
 	cmd.Flags().StringVar(&opts.description, "description", "", "optional profile description")
@@ -337,6 +425,98 @@ func bindCommonProfileFlags(cmd *cobra.Command, opts *profileOptions) {
 	cmd.Flags().IntVar(&opts.maxRetries, "max-retries", 0, "maximum restart attempts; 0 means unlimited while restart is enabled")
 	cmd.Flags().StringVar(&opts.initialBackoff, "initial-backoff", "2s", "initial restart backoff duration")
 	cmd.Flags().StringVar(&opts.maxBackoff, "max-backoff", "30s", "maximum restart backoff duration")
+}
+
+func bindEditProfileFlags(cmd *cobra.Command, opts *editProfileOptions) {
+	cmd.Flags().StringVar(&opts.name, "name", "", "rename the profile")
+	cmd.Flags().StringVar(&opts.description, "description", "", "update the profile description")
+	cmd.Flags().IntVar(&opts.localPort, "local-port", 0, "update the local port")
+	cmd.Flags().StringSliceVar(&opts.labels, "label", nil, "replace labels on the profile")
+	cmd.Flags().BoolVar(&opts.clearLabels, "clear-labels", false, "remove all labels before applying label overrides")
+	cmd.Flags().BoolVar(&opts.restartEnabled, "restart", false, "update whether the profile should restart automatically")
+	cmd.Flags().IntVar(&opts.maxRetries, "max-retries", 0, "update the maximum restart attempts; 0 means unlimited")
+	cmd.Flags().StringVar(&opts.initialBackoff, "initial-backoff", "", "update the initial restart backoff duration")
+	cmd.Flags().StringVar(&opts.maxBackoff, "max-backoff", "", "update the maximum restart backoff duration")
+	cmd.Flags().StringVar(&opts.host, "host", "", "update the SSH host alias or hostname")
+	cmd.Flags().StringVar(&opts.remoteHost, "remote-host", "", "update the SSH remote host")
+	cmd.Flags().IntVar(&opts.remotePort, "remote-port", 0, "update the SSH or Kubernetes remote port")
+	cmd.Flags().StringVar(&opts.context, "context", "", "update the Kubernetes context name")
+	cmd.Flags().StringVar(&opts.namespace, "namespace", "", "update the Kubernetes namespace")
+	cmd.Flags().StringVar(&opts.resourceType, "resource-type", "", "update the Kubernetes resource type")
+	cmd.Flags().StringVar(&opts.resource, "resource", "", "update the Kubernetes resource name")
+}
+
+func applyProfileEditFlags(cmd *cobra.Command, profile *domain.Profile, opts editProfileOptions) error {
+	if cmd.Flags().Changed("description") {
+		profile.Description = opts.description
+	}
+	if cmd.Flags().Changed("local-port") {
+		profile.LocalPort = opts.localPort
+	}
+	if opts.clearLabels {
+		profile.Labels = nil
+	}
+	if cmd.Flags().Changed("label") {
+		profile.Labels = cleanList(opts.labels)
+	}
+	if cmd.Flags().Changed("restart") {
+		profile.Restart.Enabled = opts.restartEnabled
+	}
+	if cmd.Flags().Changed("max-retries") {
+		profile.Restart.MaxRetries = opts.maxRetries
+	}
+	if cmd.Flags().Changed("initial-backoff") {
+		profile.Restart.InitialBackoff = opts.initialBackoff
+	}
+	if cmd.Flags().Changed("max-backoff") {
+		profile.Restart.MaxBackoff = opts.maxBackoff
+	}
+
+	switch profile.Type {
+	case domain.TunnelTypeSSHLocal:
+		if cmd.Flags().Changed("context") || cmd.Flags().Changed("namespace") || cmd.Flags().Changed("resource-type") || cmd.Flags().Changed("resource") {
+			return fmt.Errorf("kubernetes-specific flags cannot be used when editing SSH profile %q", profile.Name)
+		}
+
+		if profile.SSH == nil {
+			profile.SSH = &domain.SSHLocal{}
+		}
+		if cmd.Flags().Changed("host") {
+			profile.SSH.Host = opts.host
+		}
+		if cmd.Flags().Changed("remote-host") {
+			profile.SSH.RemoteHost = opts.remoteHost
+		}
+		if cmd.Flags().Changed("remote-port") {
+			profile.SSH.RemotePort = opts.remotePort
+		}
+
+	case domain.TunnelTypeKubernetesPortForward:
+		if cmd.Flags().Changed("host") || cmd.Flags().Changed("remote-host") {
+			return fmt.Errorf("ssh-specific flags cannot be used when editing Kubernetes profile %q", profile.Name)
+		}
+
+		if profile.Kubernetes == nil {
+			profile.Kubernetes = &domain.Kubernetes{}
+		}
+		if cmd.Flags().Changed("context") {
+			profile.Kubernetes.Context = opts.context
+		}
+		if cmd.Flags().Changed("namespace") {
+			profile.Kubernetes.Namespace = opts.namespace
+		}
+		if cmd.Flags().Changed("resource-type") {
+			profile.Kubernetes.ResourceType = opts.resourceType
+		}
+		if cmd.Flags().Changed("resource") {
+			profile.Kubernetes.Resource = opts.resource
+		}
+		if cmd.Flags().Changed("remote-port") {
+			profile.Kubernetes.RemotePort = opts.remotePort
+		}
+	}
+
+	return nil
 }
 
 func saveProfile(configPath string, profile domain.Profile, overwrite bool) (bool, error) {

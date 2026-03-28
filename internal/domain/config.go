@@ -169,6 +169,31 @@ func (c *Config) RemoveProfileFromStacks(name string) (updatedStacks, removedSta
 	return updatedStacks, removedStacks
 }
 
+func (c *Config) RenameProfileInStacks(oldName, newName string) int {
+	if oldName == newName {
+		return 0
+	}
+
+	updated := 0
+	for stackIdx := range c.Stacks {
+		changed := false
+		for profileIdx := range c.Stacks[stackIdx].Profiles {
+			if c.Stacks[stackIdx].Profiles[profileIdx] != oldName {
+				continue
+			}
+
+			c.Stacks[stackIdx].Profiles[profileIdx] = newName
+			changed = true
+		}
+
+		if changed {
+			updated++
+		}
+	}
+
+	return updated
+}
+
 func (c *Config) Normalize() {
 	if c.Version == 0 {
 		c.Version = CurrentConfigVersion
