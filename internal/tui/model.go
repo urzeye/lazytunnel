@@ -114,6 +114,19 @@ var (
 				Foreground(lipgloss.Color("110"))
 	filterPlaceholderStyle = lipgloss.NewStyle().
 				Foreground(lipgloss.Color("244"))
+	logTimestampStyle = lipgloss.NewStyle().
+				Foreground(lipgloss.Color("244"))
+	logProfileBadgeStyle = lipgloss.NewStyle().
+				Bold(true).
+				Foreground(lipgloss.Color("230")).
+				Background(lipgloss.Color("237")).
+				Padding(0, 1)
+	logSystemMessageStyle = lipgloss.NewStyle().
+				Foreground(lipgloss.Color("248"))
+	logStdoutMessageStyle = lipgloss.NewStyle().
+				Foreground(lipgloss.Color("252"))
+	logStderrMessageStyle = lipgloss.NewStyle().
+				Foreground(lipgloss.Color("210"))
 	headerMetaLabelStyle = lipgloss.NewStyle().
 				Foreground(lipgloss.Color("246"))
 	headerMetaSeparatorStyle = lipgloss.NewStyle().
@@ -2181,22 +2194,15 @@ func renderKeyValueLine(label, value string, width int) string {
 
 func renderLogLine(timestamp time.Time, profileName string, source domain.LogSource, message string, width int) string {
 	prefixParts := []string{
-		mutedStyle.Render(timestamp.Format("15:04:05")),
+		logTimestampStyle.Render(timestamp.Format("15:04:05")),
 		renderLogSourceBadge(source),
 	}
 	if profileName != "" {
-		prefixParts = append(prefixParts, lipgloss.NewStyle().Foreground(lipgloss.Color("110")).Render(profileName))
+		prefixParts = append(prefixParts, renderLogProfileBadge(profileName))
 	}
 
-	content := lipgloss.JoinHorizontal(lipgloss.Center, prefixParts...)
-	if strings.TrimSpace(message) == "" {
-		message = "(empty)"
-	}
-
-	if profileName != "" {
-		return composeStyledLine(content+" ", message, width)
-	}
-	return composeStyledLine(content+" ", message, width)
+	prefix := strings.Join(prefixParts, " ")
+	return composeStyledLine(prefix+" ", renderLogMessage(source, message), width)
 }
 
 func renderSizedBlock(style lipgloss.Style, width int, body string) string {
@@ -2273,6 +2279,47 @@ func renderLogSourceBadge(source domain.LogSource) string {
 	}
 
 	return style.Render(label)
+}
+
+func renderLogProfileBadge(profileName string) string {
+	return logProfileBadgeStyle.Render(profileName)
+}
+
+func renderLogMessage(source domain.LogSource, message string) string {
+	normalized := normalizeLogMessage(message)
+	return logMessageStyle(source).Render(normalized)
+}
+
+func logMessageStyle(source domain.LogSource) lipgloss.Style {
+	switch source {
+	case domain.LogSourceStderr:
+		return logStderrMessageStyle
+	case domain.LogSourceStdout:
+		return logStdoutMessageStyle
+	default:
+		return logSystemMessageStyle
+	}
+}
+
+func normalizeLogMessage(message string) string {
+	message = strings.ReplaceAll(message, "\r\n", "\n")
+	message = strings.ReplaceAll(message, "\r", "\n")
+
+	lines := strings.Split(message, "\n")
+	segments := make([]string, 0, len(lines))
+	for _, line := range lines {
+		segment := strings.Join(strings.Fields(line), " ")
+		if segment == "" {
+			continue
+		}
+		segments = append(segments, segment)
+	}
+
+	if len(segments) == 0 {
+		return "(empty)"
+	}
+
+	return strings.Join(segments, " | ")
 }
 
 func missingStackProfiles(view app.StackView) []string {

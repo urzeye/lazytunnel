@@ -344,6 +344,34 @@ func TestRenderInspectorTabsShowsKeyHints(t *testing.T) {
 	}
 }
 
+func TestNormalizeLogMessageCollapsesMultilineWhitespace(t *testing.T) {
+	t.Parallel()
+
+	got := normalizeLogMessage(" first line \n\n second\tline \r\n third line ")
+	want := "first line | second line | third line"
+	if got != want {
+		t.Fatalf("normalizeLogMessage() = %q, want %q", got, want)
+	}
+}
+
+func TestRenderLogLineShowsProfileBadgeAndNormalizedMessage(t *testing.T) {
+	t.Parallel()
+
+	got := renderLogLine(
+		time.Date(2026, 3, 28, 11, 0, 0, 0, time.UTC),
+		"api-debug",
+		domain.LogSourceStderr,
+		"boom\nsecond line",
+		120,
+	)
+
+	for _, snippet := range []string{"11:00:00", "ERR", "api-debug", "boom | second line"} {
+		if !strings.Contains(got, snippet) {
+			t.Fatalf("expected %q in rendered log line, got %q", snippet, got)
+		}
+	}
+}
+
 func TestRenderStatusBadgeUsesReadableWords(t *testing.T) {
 	t.Parallel()
 
