@@ -131,7 +131,7 @@ func newProfileCloneCommand(configPath *string) *cobra.Command {
 				profile.Description = description
 			}
 			if cmd.Flags().Changed("local-port") {
-				profile.LocalPort = localPort
+				assignProfileDisplayPort(&profile, localPort)
 			}
 			if clearLabels {
 				profile.Labels = nil
@@ -174,6 +174,7 @@ func newProfileAddCommand(configPath *string) *cobra.Command {
 
 	cmd.AddCommand(
 		newProfileAddSSHLocalCommand(configPath),
+		newProfileAddSSHRemoteCommand(configPath),
 		newProfileAddKubernetesCommand(configPath),
 	)
 
@@ -312,6 +313,54 @@ func newProfileAddSSHLocalCommand(configPath *string) *cobra.Command {
 	return cmd
 }
 
+func newProfileAddSSHRemoteCommand(configPath *string) *cobra.Command {
+	var opts addSSHRemoteOptions
+
+	cmd := &cobra.Command{
+		Use:   "ssh-remote",
+		Short: "Add or update an SSH remote-forward profile",
+		RunE: func(cmd *cobra.Command, args []string) error {
+			profile := domain.Profile{
+				Name:        opts.name,
+				Description: opts.description,
+				Type:        domain.TunnelTypeSSHRemote,
+				LocalPort:   opts.bindPort,
+				Labels:      cleanList(opts.labels),
+				Restart:     opts.restartPolicy(),
+				SSHRemote: &domain.SSHRemote{
+					Host:        opts.host,
+					BindAddress: opts.bindAddress,
+					BindPort:    opts.bindPort,
+					TargetHost:  opts.targetHost,
+					TargetPort:  opts.targetPort,
+				},
+			}
+
+			created, err := saveProfile(*configPath, profile, opts.overwrite)
+			if err != nil {
+				return err
+			}
+
+			action := "updated"
+			if created {
+				action = "added"
+			}
+			_, _ = fmt.Fprintf(cmd.OutOrStdout(), "%s profile %s\n", action, profile.Name)
+			return nil
+		},
+	}
+
+	bindCommonProfileFlagsWithoutLocalPort(cmd, &opts.profileOptions)
+	cmd.Flags().StringVar(&opts.host, "host", "", "SSH host alias or hostname to connect to")
+	cmd.Flags().StringVar(&opts.bindAddress, "bind-address", "", "remote bind address exposed by the SSH server")
+	cmd.Flags().IntVar(&opts.bindPort, "bind-port", 0, "remote port to expose on the SSH server")
+	cmd.Flags().StringVar(&opts.targetHost, "target-host", "", "target host reachable from the current machine")
+	cmd.Flags().IntVar(&opts.targetPort, "target-port", 0, "target port reachable from the current machine")
+	mustMarkRequired(cmd, "name", "host", "bind-port", "target-host", "target-port")
+
+	return cmd
+}
+
 func newProfileAddKubernetesCommand(configPath *string) *cobra.Command {
 	var opts addKubernetesOptions
 
@@ -397,6 +446,15 @@ type addKubernetesOptions struct {
 	remotePort   int
 }
 
+type addSSHRemoteOptions struct {
+	profileOptions
+	host        string
+	bindAddress string
+	bindPort    int
+	targetHost  string
+	targetPort  int
+}
+
 type editProfileOptions struct {
 	name           string
 	description    string
@@ -410,6 +468,10 @@ type editProfileOptions struct {
 	host           string
 	remoteHost     string
 	remotePort     int
+	bindAddress    string
+	bindPort       int
+	targetHost     string
+	targetPort     int
 	context        string
 	namespace      string
 	resourceType   string
@@ -417,9 +479,13 @@ type editProfileOptions struct {
 }
 
 func bindCommonProfileFlags(cmd *cobra.Command, opts *profileOptions) {
+	bindCommonProfileFlagsWithoutLocalPort(cmd, opts)
+	cmd.Flags().IntVar(&opts.localPort, "local-port", 0, "local port to bind")
+}
+
+func bindCommonProfileFlagsWithoutLocalPort(cmd *cobra.Command, opts *profileOptions) {
 	cmd.Flags().StringVar(&opts.name, "name", "", "profile name")
 	cmd.Flags().StringVar(&opts.description, "description", "", "optional profile description")
-	cmd.Flags().IntVar(&opts.localPort, "local-port", 0, "local port to bind")
 	cmd.Flags().StringSliceVar(&opts.labels, "label", nil, "labels to attach to the profile")
 	cmd.Flags().BoolVar(&opts.overwrite, "overwrite", false, "overwrite an existing profile with the same name")
 	cmd.Flags().BoolVar(&opts.restartEnabled, "restart", true, "restart the profile when the process exits unexpectedly")
@@ -441,6 +507,10 @@ func bindEditProfileFlags(cmd *cobra.Command, opts *editProfileOptions) {
 	cmd.Flags().StringVar(&opts.host, "host", "", "update the SSH host alias or hostname")
 	cmd.Flags().StringVar(&opts.remoteHost, "remote-host", "", "update the SSH remote host")
 	cmd.Flags().IntVar(&opts.remotePort, "remote-port", 0, "update the SSH or Kubernetes remote port")
+	cmd.Flags().StringVar(&opts.bindAddress, "bind-address", "", "update the SSH remote bind address")
+	cmd.Flags().IntVar(&opts.bindPort, "bind-port", 0, "update the SSH remote bind port")
+	cmd.Flags().StringVar(&opts.targetHost, "target-host", "", "update the SSH remote target host")
+	cmd.Flags().IntVar(&opts.targetPort, "target-port", 0, "update the SSH remote target port")
 	cmd.Flags().StringVar(&opts.context, "context", "", "update the Kubernetes context name")
 	cmd.Flags().StringVar(&opts.namespace, "namespace", "", "update the Kubernetes namespace")
 	cmd.Flags().StringVar(&opts.resourceType, "resource-type", "", "update the Kubernetes resource type")
@@ -452,7 +522,7 @@ func applyProfileEditFlags(cmd *cobra.Command, profile *domain.Profile, opts edi
 		profile.Description = opts.description
 	}
 	if cmd.Flags().Changed("local-port") {
-		profile.LocalPort = opts.localPort
+		assignProfileDisplayPort(profile, opts.localPort)
 	}
 	if opts.clearLabels {
 		profile.Labels = nil
@@ -478,6 +548,9 @@ func applyProfileEditFlags(cmd *cobra.Command, profile *domain.Profile, opts edi
 		if cmd.Flags().Changed("context") || cmd.Flags().Changed("namespace") || cmd.Flags().Changed("resource-type") || cmd.Flags().Changed("resource") {
 			return fmt.Errorf("kubernetes-specific flags cannot be used when editing SSH profile %q", profile.Name)
 		}
+		if cmd.Flags().Changed("bind-address") || cmd.Flags().Changed("bind-port") || cmd.Flags().Changed("target-host") || cmd.Flags().Changed("target-port") {
+			return fmt.Errorf("ssh-remote-specific flags cannot be used when editing SSH local profile %q", profile.Name)
+		}
 
 		if profile.SSH == nil {
 			profile.SSH = &domain.SSHLocal{}
@@ -492,8 +565,39 @@ func applyProfileEditFlags(cmd *cobra.Command, profile *domain.Profile, opts edi
 			profile.SSH.RemotePort = opts.remotePort
 		}
 
+	case domain.TunnelTypeSSHRemote:
+		if cmd.Flags().Changed("context") || cmd.Flags().Changed("namespace") || cmd.Flags().Changed("resource-type") || cmd.Flags().Changed("resource") {
+			return fmt.Errorf("kubernetes-specific flags cannot be used when editing SSH remote profile %q", profile.Name)
+		}
+		if cmd.Flags().Changed("remote-host") || cmd.Flags().Changed("remote-port") {
+			return fmt.Errorf("ssh-local-specific flags cannot be used when editing SSH remote profile %q", profile.Name)
+		}
+		if cmd.Flags().Changed("local-port") {
+			return fmt.Errorf("use --bind-port when editing SSH remote profile %q", profile.Name)
+		}
+
+		if profile.SSHRemote == nil {
+			profile.SSHRemote = &domain.SSHRemote{}
+		}
+		if cmd.Flags().Changed("host") {
+			profile.SSHRemote.Host = opts.host
+		}
+		if cmd.Flags().Changed("bind-address") {
+			profile.SSHRemote.BindAddress = opts.bindAddress
+		}
+		if cmd.Flags().Changed("bind-port") {
+			profile.SSHRemote.BindPort = opts.bindPort
+			profile.LocalPort = opts.bindPort
+		}
+		if cmd.Flags().Changed("target-host") {
+			profile.SSHRemote.TargetHost = opts.targetHost
+		}
+		if cmd.Flags().Changed("target-port") {
+			profile.SSHRemote.TargetPort = opts.targetPort
+		}
+
 	case domain.TunnelTypeKubernetesPortForward:
-		if cmd.Flags().Changed("host") || cmd.Flags().Changed("remote-host") {
+		if cmd.Flags().Changed("host") || cmd.Flags().Changed("remote-host") || cmd.Flags().Changed("bind-address") || cmd.Flags().Changed("bind-port") || cmd.Flags().Changed("target-host") || cmd.Flags().Changed("target-port") {
 			return fmt.Errorf("ssh-specific flags cannot be used when editing Kubernetes profile %q", profile.Name)
 		}
 
@@ -567,12 +671,27 @@ func cloneProfile(profile domain.Profile) domain.Profile {
 		sshCopy := *profile.SSH
 		cloned.SSH = &sshCopy
 	}
+	if profile.SSHRemote != nil {
+		sshRemoteCopy := *profile.SSHRemote
+		cloned.SSHRemote = &sshRemoteCopy
+	}
+	if profile.SSHDynamic != nil {
+		sshDynamicCopy := *profile.SSHDynamic
+		cloned.SSHDynamic = &sshDynamicCopy
+	}
 	if profile.Kubernetes != nil {
 		kubernetesCopy := *profile.Kubernetes
 		cloned.Kubernetes = &kubernetesCopy
 	}
 
 	return cloned
+}
+
+func assignProfileDisplayPort(profile *domain.Profile, port int) {
+	profile.LocalPort = port
+	if profile.Type == domain.TunnelTypeSSHRemote && profile.SSHRemote != nil {
+		profile.SSHRemote.BindPort = port
+	}
 }
 
 func mustMarkRequired(cmd *cobra.Command, names ...string) {

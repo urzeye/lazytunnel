@@ -60,3 +60,35 @@ func TestBuildProcessSpecRejectsWrongProfileType(t *testing.T) {
 		t.Fatal("expected wrong type error")
 	}
 }
+
+func TestBuildProcessSpecBuildsSSHRemoteCommand(t *testing.T) {
+	t.Parallel()
+
+	spec, err := BuildProcessSpec(domain.Profile{
+		Name: "public-api",
+		Type: domain.TunnelTypeSSHRemote,
+		Restart: domain.RestartPolicy{
+			Enabled: true,
+		},
+		SSHRemote: &domain.SSHRemote{
+			Host:        "bastion-prod",
+			BindAddress: "0.0.0.0",
+			BindPort:    9000,
+			TargetHost:  "127.0.0.1",
+			TargetPort:  8080,
+		},
+	})
+	if err != nil {
+		t.Fatalf("build spec: %v", err)
+	}
+
+	wantArgs := []string{
+		"-N",
+		"-o", "ExitOnForwardFailure=yes",
+		"-R", "0.0.0.0:9000:127.0.0.1:8080",
+		"bastion-prod",
+	}
+	if !reflect.DeepEqual(spec.Args, wantArgs) {
+		t.Fatalf("unexpected args: %#v", spec.Args)
+	}
+}

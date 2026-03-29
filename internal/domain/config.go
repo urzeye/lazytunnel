@@ -26,11 +26,15 @@ type TunnelType string
 
 const (
 	TunnelTypeSSHLocal              TunnelType = "ssh_local"
+	TunnelTypeSSHRemote             TunnelType = "ssh_remote"
+	TunnelTypeSSHDynamic            TunnelType = "ssh_dynamic"
 	TunnelTypeKubernetesPortForward TunnelType = "kubernetes_port_forward"
 )
 
 var supportedTunnelTypes = []TunnelType{
 	TunnelTypeSSHLocal,
+	TunnelTypeSSHRemote,
+	TunnelTypeSSHDynamic,
 	TunnelTypeKubernetesPortForward,
 }
 
@@ -49,6 +53,8 @@ type Profile struct {
 	Labels      []string      `yaml:"labels,omitempty"`
 	Restart     RestartPolicy `yaml:"restart"`
 	SSH         *SSHLocal     `yaml:"ssh,omitempty"`
+	SSHRemote   *SSHRemote    `yaml:"ssh_remote,omitempty"`
+	SSHDynamic  *SSHDynamic   `yaml:"ssh_dynamic,omitempty"`
 	Kubernetes  *Kubernetes   `yaml:"kubernetes,omitempty"`
 }
 
@@ -56,6 +62,19 @@ type SSHLocal struct {
 	Host       string `yaml:"host"`
 	RemoteHost string `yaml:"remote_host"`
 	RemotePort int    `yaml:"remote_port"`
+}
+
+type SSHRemote struct {
+	Host        string `yaml:"host"`
+	BindAddress string `yaml:"bind_address,omitempty"`
+	BindPort    int    `yaml:"bind_port"`
+	TargetHost  string `yaml:"target_host"`
+	TargetPort  int    `yaml:"target_port"`
+}
+
+type SSHDynamic struct {
+	Host        string `yaml:"host"`
+	BindAddress string `yaml:"bind_address,omitempty"`
 }
 
 type Kubernetes struct {
@@ -271,16 +290,16 @@ func (p Profile) Validate() error {
 		errs = append(errs, fmt.Errorf("unsupported tunnel type %q", p.Type))
 	}
 
-	if err := validatePort("local_port", p.LocalPort); err != nil {
-		errs = append(errs, err)
-	}
-
 	if err := p.Restart.Validate(); err != nil {
 		errs = append(errs, fmt.Errorf("restart: %w", err))
 	}
 
 	switch p.Type {
 	case TunnelTypeSSHLocal:
+		if err := validatePort("local_port", p.LocalPort); err != nil {
+			errs = append(errs, err)
+		}
+
 		if p.SSH == nil {
 			errs = append(errs, errors.New("ssh settings are required"))
 			break
@@ -290,7 +309,35 @@ func (p Profile) Validate() error {
 			errs = append(errs, fmt.Errorf("ssh: %w", err))
 		}
 
+	case TunnelTypeSSHRemote:
+		if p.SSHRemote == nil {
+			errs = append(errs, errors.New("ssh_remote settings are required"))
+			break
+		}
+
+		if err := p.SSHRemote.Validate(); err != nil {
+			errs = append(errs, fmt.Errorf("ssh_remote: %w", err))
+		}
+
+	case TunnelTypeSSHDynamic:
+		if err := validatePort("local_port", p.LocalPort); err != nil {
+			errs = append(errs, err)
+		}
+
+		if p.SSHDynamic == nil {
+			errs = append(errs, errors.New("ssh_dynamic settings are required"))
+			break
+		}
+
+		if err := p.SSHDynamic.Validate(); err != nil {
+			errs = append(errs, fmt.Errorf("ssh_dynamic: %w", err))
+		}
+
 	case TunnelTypeKubernetesPortForward:
+		if err := validatePort("local_port", p.LocalPort); err != nil {
+			errs = append(errs, err)
+		}
+
 		if p.Kubernetes == nil {
 			errs = append(errs, errors.New("kubernetes settings are required"))
 			break
@@ -320,6 +367,36 @@ func (s SSHLocal) Validate() error {
 	}
 
 	return errors.Join(errs...)
+}
+
+func (s SSHRemote) Validate() error {
+	var errs []error
+
+	if strings.TrimSpace(s.Host) == "" {
+		errs = append(errs, errors.New("host is required"))
+	}
+
+	if err := validatePort("bind_port", s.BindPort); err != nil {
+		errs = append(errs, err)
+	}
+
+	if strings.TrimSpace(s.TargetHost) == "" {
+		errs = append(errs, errors.New("target_host is required"))
+	}
+
+	if err := validatePort("target_port", s.TargetPort); err != nil {
+		errs = append(errs, err)
+	}
+
+	return errors.Join(errs...)
+}
+
+func (s SSHDynamic) Validate() error {
+	if strings.TrimSpace(s.Host) == "" {
+		return errors.New("host is required")
+	}
+
+	return nil
 }
 
 func (k Kubernetes) Validate() error {

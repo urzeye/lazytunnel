@@ -89,6 +89,45 @@ func TestProfileAddSSHLocalPersistsProfile(t *testing.T) {
 	}
 }
 
+func TestProfileAddSSHRemotePersistsProfile(t *testing.T) {
+	t.Parallel()
+
+	configPath := filepath.Join(t.TempDir(), "config.yaml")
+	if err := storage.SaveConfig(configPath, domain.DefaultConfig()); err != nil {
+		t.Fatalf("save config: %v", err)
+	}
+
+	output := executeCommand(t,
+		"--config", configPath,
+		"profile", "add", "ssh-remote",
+		"--name", "public-api",
+		"--host", "bastion-prod",
+		"--bind-address", "0.0.0.0",
+		"--bind-port", "9000",
+		"--target-host", "127.0.0.1",
+		"--target-port", "8080",
+	)
+
+	if !strings.Contains(output, "added profile public-api") {
+		t.Fatalf("unexpected output: %q", output)
+	}
+
+	cfg, err := storage.LoadConfig(configPath)
+	if err != nil {
+		t.Fatalf("load config: %v", err)
+	}
+
+	if got := len(cfg.Profiles); got != 1 {
+		t.Fatalf("expected 1 profile, got %d", got)
+	}
+	if got := cfg.Profiles[0].Type; got != domain.TunnelTypeSSHRemote {
+		t.Fatalf("expected ssh_remote profile, got %q", got)
+	}
+	if cfg.Profiles[0].SSHRemote == nil || cfg.Profiles[0].SSHRemote.BindPort != 9000 || cfg.Profiles[0].SSHRemote.TargetPort != 8080 {
+		t.Fatalf("unexpected ssh remote settings: %#v", cfg.Profiles[0].SSHRemote)
+	}
+}
+
 func TestStackAddPersistsStack(t *testing.T) {
 	t.Parallel()
 
@@ -336,6 +375,61 @@ func TestProfileEditUpdatesKubernetesFields(t *testing.T) {
 	}
 	if got := strings.Join(edited.Labels, ","); got != "staging" {
 		t.Fatalf("unexpected labels: %q", got)
+	}
+}
+
+func TestProfileEditUpdatesSSHRemoteFields(t *testing.T) {
+	t.Parallel()
+
+	configPath := filepath.Join(t.TempDir(), "config.yaml")
+	cfg := domain.DefaultConfig()
+	cfg.Profiles = []domain.Profile{
+		{
+			Name:      "public-api",
+			Type:      domain.TunnelTypeSSHRemote,
+			LocalPort: 9000,
+			SSHRemote: &domain.SSHRemote{
+				Host:       "bastion-prod",
+				BindPort:   9000,
+				TargetHost: "127.0.0.1",
+				TargetPort: 8080,
+			},
+		},
+	}
+	if err := storage.SaveConfig(configPath, cfg); err != nil {
+		t.Fatalf("save config: %v", err)
+	}
+
+	output := executeCommand(t,
+		"--config", configPath,
+		"profile", "edit", "public-api",
+		"--bind-address", "0.0.0.0",
+		"--bind-port", "9443",
+		"--target-host", "127.0.0.1",
+		"--target-port", "8443",
+	)
+
+	if !strings.Contains(output, "updated profile public-api") {
+		t.Fatalf("unexpected output: %q", output)
+	}
+
+	persisted, err := storage.LoadConfig(configPath)
+	if err != nil {
+		t.Fatalf("load config: %v", err)
+	}
+
+	edited, exists := findProfile(persisted.Profiles, "public-api")
+	if !exists {
+		t.Fatal("expected edited profile to exist")
+	}
+	if edited.SSHRemote == nil {
+		t.Fatal("expected ssh remote settings to exist")
+	}
+	if edited.SSHRemote.BindAddress != "0.0.0.0" || edited.SSHRemote.BindPort != 9443 {
+		t.Fatalf("unexpected bind settings: %#v", edited.SSHRemote)
+	}
+	if edited.SSHRemote.TargetHost != "127.0.0.1" || edited.SSHRemote.TargetPort != 8443 {
+		t.Fatalf("unexpected target settings: %#v", edited.SSHRemote)
 	}
 }
 

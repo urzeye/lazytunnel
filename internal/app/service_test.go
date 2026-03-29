@@ -76,6 +76,37 @@ func TestServiceStartProfileRejectsManagedPortConflict(t *testing.T) {
 	}
 }
 
+func TestServiceStartProfileSkipsLocalPortChecksForSSHRemote(t *testing.T) {
+	t.Parallel()
+
+	cfg := testConfig()
+	cfg.Profiles = append(cfg.Profiles, domain.Profile{
+		Name: "public-api",
+		Type: domain.TunnelTypeSSHRemote,
+		SSHRemote: &domain.SSHRemote{
+			Host:       "bastion-prod",
+			BindPort:   9000,
+			TargetHost: "127.0.0.1",
+			TargetPort: 8080,
+		},
+	})
+
+	service, err := NewService(
+		cfg,
+		newFakeRuntimeController(),
+		WithPortChecker(fakePortChecker{errs: map[int]error{
+			9000: errors.New("address already in use"),
+		}}),
+	)
+	if err != nil {
+		t.Fatalf("new service: %v", err)
+	}
+
+	if err := service.StartProfile("public-api"); err != nil {
+		t.Fatalf("expected ssh remote profile to skip local port checks, got %v", err)
+	}
+}
+
 func TestServiceToggleProfileStopsActiveTunnel(t *testing.T) {
 	t.Parallel()
 

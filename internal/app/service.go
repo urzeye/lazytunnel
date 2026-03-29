@@ -329,11 +329,13 @@ func (s *Service) AnalyzeProfileStart(name string) (ProfileStartAnalysis, error)
 		analysis.Problems = append(analysis.Problems, err.Error())
 	}
 
-	if owner, exists := s.activePortOwner(profile.Name, profile.LocalPort); exists {
-		analysis.Problems = append(
-			analysis.Problems,
-			fmt.Sprintf("local port %d is already used by active profile %q", profile.LocalPort, owner),
-		)
+	if localPort, managed := managedLocalPort(profile); managed {
+		if owner, exists := s.activePortOwner(profile.Name, localPort); exists {
+			analysis.Problems = append(
+				analysis.Problems,
+				fmt.Sprintf("local port %d is already used by active profile %q", localPort, owner),
+			)
+		}
 	}
 
 	if len(analysis.Problems) > 0 {
@@ -363,7 +365,9 @@ func (s *Service) AnalyzeStackStart(name string) (StackStartAnalysis, error) {
 			continue
 		}
 
-		reservedPorts[profile.LocalPort] = profileName
+		if localPort, managed := managedLocalPort(profile); managed {
+			reservedPorts[localPort] = profileName
+		}
 	}
 
 	analysis := StackStartAnalysis{
@@ -394,11 +398,13 @@ func (s *Service) AnalyzeStackStart(name string) (StackStartAnalysis, error) {
 			member.Problems = append(member.Problems, err.Error())
 		}
 
-		if owner, exists := reservedPorts[profile.LocalPort]; exists && owner != profile.Name {
-			member.Problems = append(
-				member.Problems,
-				fmt.Sprintf("local port %d is already reserved by profile %q", profile.LocalPort, owner),
-			)
+		if localPort, managed := managedLocalPort(profile); managed {
+			if owner, exists := reservedPorts[localPort]; exists && owner != profile.Name {
+				member.Problems = append(
+					member.Problems,
+					fmt.Sprintf("local port %d is already reserved by profile %q", localPort, owner),
+				)
+			}
 		}
 
 		if len(member.Problems) > 0 {
@@ -410,7 +416,9 @@ func (s *Service) AnalyzeStackStart(name string) (StackStartAnalysis, error) {
 
 		member.Status = StartReadinessReady
 		analysis.ReadyCount++
-		reservedPorts[profile.LocalPort] = profile.Name
+		if localPort, managed := managedLocalPort(profile); managed {
+			reservedPorts[localPort] = profile.Name
+		}
 		analysis.Members = append(analysis.Members, member)
 	}
 
@@ -546,12 +554,14 @@ func (s *Service) startProfile(profile domain.Profile) error {
 		return fmt.Errorf("profile %q is already active", profile.Name)
 	}
 
-	if owner, exists := s.activePortOwner(profile.Name, profile.LocalPort); exists {
-		return fmt.Errorf("local port %d is already used by active profile %q", profile.LocalPort, owner)
-	}
+	if localPort, managed := managedLocalPort(profile); managed {
+		if owner, exists := s.activePortOwner(profile.Name, localPort); exists {
+			return fmt.Errorf("local port %d is already used by active profile %q", localPort, owner)
+		}
 
-	if err := s.portChecker.CheckLocalPort(profile.LocalPort); err != nil {
-		return err
+		if err := s.portChecker.CheckLocalPort(localPort); err != nil {
+			return err
+		}
 	}
 
 	return s.startPreparedProfile(profile)
@@ -579,7 +589,9 @@ func (s *Service) preflightStackStart(stack domain.Stack) ([]domain.Profile, err
 			continue
 		}
 
-		reservedPorts[profile.LocalPort] = profileName
+		if localPort, managed := managedLocalPort(profile); managed {
+			reservedPorts[localPort] = profileName
+		}
 	}
 
 	pending := make([]domain.Profile, 0, len(stack.Profiles))
@@ -595,17 +607,19 @@ func (s *Service) preflightStackStart(stack domain.Stack) ([]domain.Profile, err
 			continue
 		}
 
-		if owner, exists := reservedPorts[profile.LocalPort]; exists && owner != profile.Name {
-			errs = append(errs, fmt.Errorf("profile %q: local port %d is already reserved by profile %q", profile.Name, profile.LocalPort, owner))
-			continue
-		}
+		if localPort, managed := managedLocalPort(profile); managed {
+			if owner, exists := reservedPorts[localPort]; exists && owner != profile.Name {
+				errs = append(errs, fmt.Errorf("profile %q: local port %d is already reserved by profile %q", profile.Name, localPort, owner))
+				continue
+			}
 
-		if err := s.portChecker.CheckLocalPort(profile.LocalPort); err != nil {
-			errs = append(errs, fmt.Errorf("profile %q: %w", profile.Name, err))
-			continue
-		}
+			if err := s.portChecker.CheckLocalPort(localPort); err != nil {
+				errs = append(errs, fmt.Errorf("profile %q: %w", profile.Name, err))
+				continue
+			}
 
-		reservedPorts[profile.LocalPort] = profile.Name
+			reservedPorts[localPort] = profile.Name
+		}
 		pending = append(pending, profile)
 	}
 
@@ -627,7 +641,8 @@ func (s *Service) activePortOwner(excludedName string, port int) (string, bool) 
 			continue
 		}
 
-		if profile.LocalPort == port {
+		localPort, managed := managedLocalPort(profile)
+		if managed && localPort == port {
 			return profileName, true
 		}
 	}
@@ -676,6 +691,15 @@ func isActiveStatus(status domain.TunnelStatus) bool {
 	}
 }
 
+func managedLocalPort(profile domain.Profile) (int, bool) {
+	switch profile.Type {
+	case domain.TunnelTypeSSHLocal, domain.TunnelTypeSSHDynamic, domain.TunnelTypeKubernetesPortForward:
+		return profile.LocalPort, true
+	default:
+		return 0, false
+	}
+}
+
 func cloneConfig(config domain.Config) domain.Config {
 	cloned := domain.Config{
 		Version:  config.Version,
@@ -690,6 +714,14 @@ func cloneConfig(config domain.Config) domain.Config {
 		if profile.SSH != nil {
 			sshCopy := *profile.SSH
 			profileCopy.SSH = &sshCopy
+		}
+		if profile.SSHRemote != nil {
+			sshRemoteCopy := *profile.SSHRemote
+			profileCopy.SSHRemote = &sshRemoteCopy
+		}
+		if profile.SSHDynamic != nil {
+			sshDynamicCopy := *profile.SSHDynamic
+			profileCopy.SSHDynamic = &sshDynamicCopy
 		}
 		if profile.Kubernetes != nil {
 			kubernetesCopy := *profile.Kubernetes

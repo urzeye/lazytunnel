@@ -126,6 +126,28 @@ func TestProfileValidateRejectsIncompleteKubernetesProfile(t *testing.T) {
 	}
 }
 
+func TestProfileValidateAcceptsSSHRemoteProfile(t *testing.T) {
+	t.Parallel()
+
+	profile := Profile{
+		Name: "public-api",
+		Type: TunnelTypeSSHRemote,
+		Restart: RestartPolicy{
+			Enabled: true,
+		},
+		SSHRemote: &SSHRemote{
+			Host:       "bastion-prod",
+			BindPort:   9000,
+			TargetHost: "127.0.0.1",
+			TargetPort: 8080,
+		},
+	}
+
+	if err := profile.Validate(); err != nil {
+		t.Fatalf("expected SSH remote profile to validate, got %v", err)
+	}
+}
+
 func TestConfigValidateRejectsUnsupportedLanguage(t *testing.T) {
 	t.Parallel()
 

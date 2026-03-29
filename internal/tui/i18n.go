@@ -89,6 +89,10 @@ func humanTunnelType(language domain.Language, kind domain.TunnelType) string {
 	switch kind {
 	case domain.TunnelTypeSSHLocal:
 		return translate(language, "SSH local forward", "SSH 本地转发")
+	case domain.TunnelTypeSSHRemote:
+		return translate(language, "SSH remote forward", "SSH 远程转发")
+	case domain.TunnelTypeSSHDynamic:
+		return translate(language, "SSH SOCKS proxy", "SSH SOCKS 代理")
 	case domain.TunnelTypeKubernetesPortForward:
 		return translate(language, "Kubernetes port-forward", "Kubernetes 端口转发")
 	default:
@@ -103,6 +107,22 @@ func profileTarget(language domain.Language, profile domain.Profile) string {
 			return translate(language, "SSH target not configured", "SSH 目标尚未配置")
 		}
 		return fmt.Sprintf("%s -> %s:%d", profile.SSH.Host, profile.SSH.RemoteHost, profile.SSH.RemotePort)
+	case domain.TunnelTypeSSHRemote:
+		if profile.SSHRemote == nil {
+			return translate(language, "SSH remote target not configured", "SSH 远程转发目标尚未配置")
+		}
+		return fmt.Sprintf(
+			"%s • remote %s -> %s:%d",
+			profile.SSHRemote.Host,
+			profileRemoteBind(profile),
+			profile.SSHRemote.TargetHost,
+			profile.SSHRemote.TargetPort,
+		)
+	case domain.TunnelTypeSSHDynamic:
+		if profile.SSHDynamic == nil {
+			return translate(language, "SSH SOCKS target not configured", "SSH SOCKS 目标尚未配置")
+		}
+		return fmt.Sprintf("%s • SOCKS %s", profile.SSHDynamic.Host, profileLocalBind(profile))
 	case domain.TunnelTypeKubernetesPortForward:
 		if profile.Kubernetes == nil {
 			return translate(language, "Kubernetes target not configured", "Kubernetes 目标尚未配置")
@@ -125,6 +145,55 @@ func profileTarget(language domain.Language, profile domain.Profile) string {
 	default:
 		return translate(language, "Unknown target", "未知目标")
 	}
+}
+
+func profilePortSummaryLabel(language domain.Language, profile domain.Profile) string {
+	switch profile.Type {
+	case domain.TunnelTypeSSHRemote:
+		return translate(language, "Remote Bind", "远端监听")
+	default:
+		return translate(language, "Local", "本地")
+	}
+}
+
+func profilePortSummaryValue(profile domain.Profile) string {
+	switch profile.Type {
+	case domain.TunnelTypeSSHRemote:
+		return profileRemoteBind(profile)
+	default:
+		return profileLocalBind(profile)
+	}
+}
+
+func profileListPort(profile domain.Profile) string {
+	switch profile.Type {
+	case domain.TunnelTypeSSHRemote:
+		return "R:" + fmt.Sprintf("%d", profileDisplayPort(profile))
+	default:
+		return ":" + fmt.Sprintf("%d", profileDisplayPort(profile))
+	}
+}
+
+func profileDisplayPort(profile domain.Profile) int {
+	switch profile.Type {
+	case domain.TunnelTypeSSHRemote:
+		if profile.SSHRemote != nil && profile.SSHRemote.BindPort > 0 {
+			return profile.SSHRemote.BindPort
+		}
+	}
+	return profile.LocalPort
+}
+
+func profileLocalBind(profile domain.Profile) string {
+	return fmt.Sprintf(":%d", profileDisplayPort(profile))
+}
+
+func profileRemoteBind(profile domain.Profile) string {
+	bindPort := profileDisplayPort(profile)
+	if profile.SSHRemote == nil || profile.SSHRemote.BindAddress == "" {
+		return fmt.Sprintf(":%d", bindPort)
+	}
+	return fmt.Sprintf("%s:%d", profile.SSHRemote.BindAddress, bindPort)
 }
 
 func stackMembersSummary(language domain.Language, view app.StackView) string {

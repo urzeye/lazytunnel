@@ -50,6 +50,28 @@ func TestBuildProcessSpecDispatchesKubernetesProfile(t *testing.T) {
 	}
 }
 
+func TestBuildProcessSpecDispatchesSSHRemoteProfile(t *testing.T) {
+	t.Parallel()
+
+	spec, err := BuildProcessSpec(domain.Profile{
+		Name: "public-api",
+		Type: domain.TunnelTypeSSHRemote,
+		SSHRemote: &domain.SSHRemote{
+			Host:       "bastion-prod",
+			BindPort:   9000,
+			TargetHost: "127.0.0.1",
+			TargetPort: 8080,
+		},
+	})
+	if err != nil {
+		t.Fatalf("build spec: %v", err)
+	}
+
+	if spec.Command != "ssh" {
+		t.Fatalf("expected ssh command, got %q", spec.Command)
+	}
+}
+
 func TestBuildProcessSpecRejectsUnsupportedType(t *testing.T) {
 	t.Parallel()
 

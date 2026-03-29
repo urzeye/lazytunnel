@@ -48,6 +48,20 @@ func TestProfileTarget(t *testing.T) {
 			},
 			want: "dev-cluster • backend • service/api:80",
 		},
+		{
+			name: "ssh remote",
+			profile: domain.Profile{
+				Type: domain.TunnelTypeSSHRemote,
+				SSHRemote: &domain.SSHRemote{
+					Host:        "bastion-prod",
+					BindAddress: "0.0.0.0",
+					BindPort:    9000,
+					TargetHost:  "127.0.0.1",
+					TargetPort:  8080,
+				},
+			},
+			want: "bastion-prod • remote 0.0.0.0:9000 -> 127.0.0.1:8080",
+		},
 	}
 
 	for _, tt := range tests {

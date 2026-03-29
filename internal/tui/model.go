@@ -611,7 +611,7 @@ func (m Model) renderProfileRow(view app.ProfileView, selected bool, focused boo
 	contentWidth := max(1, width-style.GetHorizontalFrameSize()-lipgloss.Width(marker))
 	line := composeStyledLine(
 		renderStatusBadge(m.language(), view.State.Status)+" ",
-		fmt.Sprintf("%s  :%d  %s", view.Profile.Name, view.Profile.LocalPort, profileTarget(m.language(), view.Profile)),
+		fmt.Sprintf("%s  %s  %s", view.Profile.Name, profileListPort(view.Profile), profileTarget(m.language(), view.Profile)),
 		contentWidth,
 	)
 	return renderSizedBlock(style, width, marker+line)
@@ -718,7 +718,7 @@ func (m Model) renderProfileDetailLines(view app.ProfileView, width int) []strin
 			width,
 		),
 		groupTitleStyle.Render(m.t("Overview", "概览")),
-		renderCompactKeyValue(m.t("Local", "本地"), fmt.Sprintf(":%d", view.Profile.LocalPort), width),
+		renderCompactKeyValue(profilePortSummaryLabel(language, view.Profile), profilePortSummaryValue(view.Profile), width),
 		renderCompactKeyValue(m.t("Target", "目标"), profileTarget(language, view.Profile), width),
 		groupTitleStyle.Render(m.t("Runtime", "运行态")),
 		renderCompactKeyValue(m.t("Status", "状态"), humanTunnelStatus(language, view.State.Status), width),
@@ -787,7 +787,7 @@ func (m Model) renderStackDetailLines(view app.StackView, width int) []string {
 		for _, member := range view.Members {
 			lines = append(lines, composeStyledLine(
 				renderStatusBadge(language, member.State.Status)+" ",
-				fmt.Sprintf("%s  :%d  %s", member.Profile.Name, member.Profile.LocalPort, profileTarget(language, member.Profile)),
+				fmt.Sprintf("%s  %s  %s", member.Profile.Name, profileListPort(member.Profile), profileTarget(language, member.Profile)),
 				width,
 			))
 		}
@@ -1159,7 +1159,7 @@ func (m Model) cloneSelectedProfile(profiles []app.ProfileView) Model {
 	cfg := m.service.Config()
 	profile := cloneProfileDefinition(selected.Profile)
 	profile.Name = nextCopyName(profileNames(cfg), selected.Profile.Name)
-	profile.LocalPort = nextAvailableLocalPort(cfg, selected.Profile.LocalPort+1)
+	assignProfileDisplayPort(&profile, nextAvailableLocalPort(cfg, profileDisplayPort(selected.Profile)+1))
 	profile.Labels = appendUniqueLabel(profile.Labels, "draft")
 
 	cfg.SetProfile(profile)
@@ -2041,11 +2041,26 @@ func cloneProfileDefinition(profile domain.Profile) domain.Profile {
 		sshCopy := *profile.SSH
 		cloned.SSH = &sshCopy
 	}
+	if profile.SSHRemote != nil {
+		sshRemoteCopy := *profile.SSHRemote
+		cloned.SSHRemote = &sshRemoteCopy
+	}
+	if profile.SSHDynamic != nil {
+		sshDynamicCopy := *profile.SSHDynamic
+		cloned.SSHDynamic = &sshDynamicCopy
+	}
 	if profile.Kubernetes != nil {
 		kubernetesCopy := *profile.Kubernetes
 		cloned.Kubernetes = &kubernetesCopy
 	}
 	return cloned
+}
+
+func assignProfileDisplayPort(profile *domain.Profile, port int) {
+	profile.LocalPort = port
+	if profile.Type == domain.TunnelTypeSSHRemote && profile.SSHRemote != nil {
+		profile.SSHRemote.BindPort = port
+	}
 }
 
 func cloneStackDefinition(stack domain.Stack) domain.Stack {
@@ -2594,7 +2609,7 @@ func profileSearchText(view app.ProfileView) string {
 		string(view.Profile.Type),
 		humanTunnelType(domain.LanguageEnglish, view.Profile.Type),
 		profileTarget(domain.LanguageEnglish, view.Profile),
-		fmt.Sprintf("%d", view.Profile.LocalPort),
+		fmt.Sprintf("%d", profileDisplayPort(view.Profile)),
 	}
 	parts = append(parts, view.Profile.Labels...)
 	return strings.Join(parts, " ")
@@ -2614,7 +2629,7 @@ func stackSearchText(view app.StackView) string {
 			member.Profile.Name,
 			member.Profile.Description,
 			profileTarget(domain.LanguageEnglish, member.Profile),
-			fmt.Sprintf("%d", member.Profile.LocalPort),
+			fmt.Sprintf("%d", profileDisplayPort(member.Profile)),
 		)
 		parts = append(parts, member.Profile.Labels...)
 	}
