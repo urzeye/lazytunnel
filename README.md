@@ -7,12 +7,9 @@ English | [简体中文](README.zh-CN.md)
 LazyTunnel is a keyboard-first workspace for the tunnels you use every day:
 
 - SSH local forwards with `ssh -L`
-- Kubernetes port-forwards with `kubectl port-forward`
-
-Planned later:
-
 - SSH remote forwards with `ssh -R`
 - SSH SOCKS proxies with `ssh -D`
+- Kubernetes port-forwards with `kubectl port-forward`
 
 Instead of retyping long commands, remembering ports, and reopening dropped sessions by hand, you manage everything from one terminal UI.
 
@@ -79,6 +76,27 @@ lazytunnel profile add ssh-local \
   --remote-host db.internal \
   --remote-port 5432 \
   --local-port 5432
+```
+
+Add an SSH remote-forward profile:
+
+```bash
+lazytunnel profile add ssh-remote \
+  --name public-api \
+  --host bastion-prod \
+  --bind-address 0.0.0.0 \
+  --bind-port 9000 \
+  --target-host 127.0.0.1 \
+  --target-port 8080
+```
+
+Add an SSH dynamic SOCKS profile:
+
+```bash
+lazytunnel profile add ssh-dynamic \
+  --name dev-socks \
+  --host bastion-prod \
+  --local-port 1080
 ```
 
 Add a Kubernetes port-forward profile:
@@ -171,19 +189,16 @@ LazyTunnel is designed around a few strong workflows:
 ## Supported Today
 
 - SSH local forward: `ssh -L`
-- Kubernetes port-forward for `pod`, `service`, and `deployment`
-
-## Planned Later
-
 - SSH remote forward: `ssh -R`
 - SSH dynamic proxy: `ssh -D`
+- Kubernetes port-forward for `pod`, `service`, and `deployment`
 
 ## Near-Term Roadmap
 
 - richer runtime status, reconnect insight, and log surfaces in the TUI
 - log formatting, visual polish, and filtering inside the logs inspector
 - better project stacks with labels and preflight validation
-- an explicit manual restart action in the TUI if start/stop still feels insufficient
+- release and installation polish around tagged binaries
 
 ## Non-Goals
 

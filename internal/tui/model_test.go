@@ -65,6 +65,18 @@ func TestProfileTarget(t *testing.T) {
 			},
 			want: "bastion-prod • remote 0.0.0.0:9000 -> 127.0.0.1:8080",
 		},
+		{
+			name: "ssh dynamic",
+			profile: domain.Profile{
+				Type:      domain.TunnelTypeSSHDynamic,
+				LocalPort: 1080,
+				SSHDynamic: &domain.SSHDynamic{
+					Host:        "bastion-prod",
+					BindAddress: "127.0.0.1",
+				},
+			},
+			want: "bastion-prod • SOCKS :1080",
+		},
 	}
 
 	for _, tt := range tests {
@@ -405,6 +417,94 @@ func TestRenderLogLineShowsProfileBadgeAndNormalizedMessage(t *testing.T) {
 	for _, snippet := range []string{"11:00:00", "ERR", "api-debug", "boom | second line"} {
 		if !strings.Contains(got, snippet) {
 			t.Fatalf("expected %q in rendered log line, got %q", snippet, got)
+		}
+	}
+}
+
+func TestRenderProfileLogLinesIncludeSummaryAndFilterState(t *testing.T) {
+	t.Parallel()
+
+	view := app.ProfileView{
+		State: domain.RuntimeState{
+			RecentLogs: []domain.LogEntry{
+				{
+					Timestamp: time.Date(2026, 3, 30, 10, 0, 0, 0, time.UTC),
+					Source:    domain.LogSourceStdout,
+					Message:   "server ready",
+				},
+				{
+					Timestamp: time.Date(2026, 3, 30, 10, 0, 1, 0, time.UTC),
+					Source:    domain.LogSourceStderr,
+					Message:   "dial tcp timeout",
+				},
+			},
+		},
+	}
+
+	model := Model{logFilterQuery: "timeout"}
+	lines := model.renderProfileLogLines(view, 120)
+	rendered := strings.Join(lines, "\n")
+
+	for _, snippet := range []string{"Showing 1/2 logs", "Sources", "Filter:"} {
+		if !strings.Contains(rendered, snippet) {
+			t.Fatalf("expected %q in profile log summary, got %q", snippet, rendered)
+		}
+	}
+	if !strings.Contains(rendered, renderLogSourceBadge(domain.LogSourceStderr, "")) {
+		t.Fatalf("expected stderr badge in profile log summary, got %q", rendered)
+	}
+	if !strings.Contains(rendered, filterMatchStyle.Render("timeout")) {
+		t.Fatalf("expected highlighted filter query in summary, got %q", rendered)
+	}
+}
+
+func TestRenderStackLogLinesIncludeProfileCoverageSummary(t *testing.T) {
+	t.Parallel()
+
+	view := app.StackView{
+		Members: []app.ProfileView{
+			{
+				Profile: domain.Profile{Name: "api-debug"},
+				State: domain.RuntimeState{
+					RecentLogs: []domain.LogEntry{
+						{
+							Timestamp: time.Date(2026, 3, 30, 10, 0, 0, 0, time.UTC),
+							Source:    domain.LogSourceStdout,
+							Message:   "api ready",
+						},
+					},
+				},
+			},
+			{
+				Profile: domain.Profile{Name: "worker-debug"},
+				State: domain.RuntimeState{
+					RecentLogs: []domain.LogEntry{
+						{
+							Timestamp: time.Date(2026, 3, 30, 10, 0, 1, 0, time.UTC),
+							Source:    domain.LogSourceSystem,
+							Message:   "worker started",
+						},
+					},
+				},
+			},
+		},
+	}
+
+	model := Model{}
+	lines := model.renderStackLogLines(view, 120)
+	rendered := strings.Join(lines, "\n")
+
+	for _, snippet := range []string{"Showing 2 logs from 2 profiles", "Sources"} {
+		if !strings.Contains(rendered, snippet) {
+			t.Fatalf("expected %q in stack log summary, got %q", snippet, rendered)
+		}
+	}
+	for _, badge := range []string{
+		renderLogSourceBadge(domain.LogSourceSystem, ""),
+		renderLogSourceBadge(domain.LogSourceStdout, ""),
+	} {
+		if !strings.Contains(rendered, badge) {
+			t.Fatalf("expected %q in stack log summary, got %q", badge, rendered)
 		}
 	}
 }

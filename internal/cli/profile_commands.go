@@ -175,6 +175,7 @@ func newProfileAddCommand(configPath *string) *cobra.Command {
 	cmd.AddCommand(
 		newProfileAddSSHLocalCommand(configPath),
 		newProfileAddSSHRemoteCommand(configPath),
+		newProfileAddSSHDynamicCommand(configPath),
 		newProfileAddKubernetesCommand(configPath),
 	)
 
@@ -361,6 +362,48 @@ func newProfileAddSSHRemoteCommand(configPath *string) *cobra.Command {
 	return cmd
 }
 
+func newProfileAddSSHDynamicCommand(configPath *string) *cobra.Command {
+	var opts addSSHDynamicOptions
+
+	cmd := &cobra.Command{
+		Use:   "ssh-dynamic",
+		Short: "Add or update an SSH dynamic SOCKS profile",
+		RunE: func(cmd *cobra.Command, args []string) error {
+			profile := domain.Profile{
+				Name:        opts.name,
+				Description: opts.description,
+				Type:        domain.TunnelTypeSSHDynamic,
+				LocalPort:   opts.localPort,
+				Labels:      cleanList(opts.labels),
+				Restart:     opts.restartPolicy(),
+				SSHDynamic: &domain.SSHDynamic{
+					Host:        opts.host,
+					BindAddress: opts.bindAddress,
+				},
+			}
+
+			created, err := saveProfile(*configPath, profile, opts.overwrite)
+			if err != nil {
+				return err
+			}
+
+			action := "updated"
+			if created {
+				action = "added"
+			}
+			_, _ = fmt.Fprintf(cmd.OutOrStdout(), "%s profile %s\n", action, profile.Name)
+			return nil
+		},
+	}
+
+	bindCommonProfileFlags(cmd, &opts.profileOptions)
+	cmd.Flags().StringVar(&opts.host, "host", "", "SSH host alias or hostname to connect to")
+	cmd.Flags().StringVar(&opts.bindAddress, "bind-address", "", "local bind address exposed by the SOCKS listener")
+	mustMarkRequired(cmd, "name", "host", "local-port")
+
+	return cmd
+}
+
 func newProfileAddKubernetesCommand(configPath *string) *cobra.Command {
 	var opts addKubernetesOptions
 
@@ -453,6 +496,12 @@ type addSSHRemoteOptions struct {
 	bindPort    int
 	targetHost  string
 	targetPort  int
+}
+
+type addSSHDynamicOptions struct {
+	profileOptions
+	host        string
+	bindAddress string
 }
 
 type editProfileOptions struct {
@@ -594,6 +643,30 @@ func applyProfileEditFlags(cmd *cobra.Command, profile *domain.Profile, opts edi
 		}
 		if cmd.Flags().Changed("target-port") {
 			profile.SSHRemote.TargetPort = opts.targetPort
+		}
+
+	case domain.TunnelTypeSSHDynamic:
+		if cmd.Flags().Changed("context") || cmd.Flags().Changed("namespace") || cmd.Flags().Changed("resource-type") || cmd.Flags().Changed("resource") {
+			return fmt.Errorf("kubernetes-specific flags cannot be used when editing SSH dynamic profile %q", profile.Name)
+		}
+		if cmd.Flags().Changed("remote-host") || cmd.Flags().Changed("remote-port") {
+			return fmt.Errorf("ssh-local-specific flags cannot be used when editing SSH dynamic profile %q", profile.Name)
+		}
+		if cmd.Flags().Changed("target-host") || cmd.Flags().Changed("target-port") {
+			return fmt.Errorf("ssh-remote-specific flags cannot be used when editing SSH dynamic profile %q", profile.Name)
+		}
+		if cmd.Flags().Changed("bind-port") {
+			return fmt.Errorf("use --local-port when editing SSH dynamic profile %q", profile.Name)
+		}
+
+		if profile.SSHDynamic == nil {
+			profile.SSHDynamic = &domain.SSHDynamic{}
+		}
+		if cmd.Flags().Changed("host") {
+			profile.SSHDynamic.Host = opts.host
+		}
+		if cmd.Flags().Changed("bind-address") {
+			profile.SSHDynamic.BindAddress = opts.bindAddress
 		}
 
 	case domain.TunnelTypeKubernetesPortForward:

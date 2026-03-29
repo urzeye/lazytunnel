@@ -15,6 +15,8 @@ func BuildProcessSpec(profile domain.Profile) (ltruntime.ProcessSpec, error) {
 		return ssh.BuildProcessSpec(profile)
 	case domain.TunnelTypeSSHRemote:
 		return ssh.BuildProcessSpec(profile)
+	case domain.TunnelTypeSSHDynamic:
+		return ssh.BuildProcessSpec(profile)
 	case domain.TunnelTypeKubernetesPortForward:
 		return kubernetes.BuildProcessSpec(profile)
 	default:

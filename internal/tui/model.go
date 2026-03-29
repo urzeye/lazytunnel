@@ -1029,7 +1029,14 @@ func (m Model) renderProfileLogLines(view app.ProfileView, width int) []string {
 		return []string{mutedStyle.Render(truncateText(m.tf("No logs match %q. Press Esc to clear the log filter.", "没有匹配 %q 的日志。按 Esc 清除日志筛选。", m.logFilterQuery), width))}
 	}
 
-	lines := make([]string, 0, len(filtered))
+	lines := make([]string, 0, len(filtered)+3)
+	lines = append(lines, m.renderLogSummaryLines(
+		m.tf("Showing %s logs • newest first", "显示 %s 条日志 • 最新在前", formatVisibleCount(len(filtered), len(view.State.RecentLogs))),
+		logSourceCountsForEntries(filtered),
+		m.logFilterQuery,
+		width,
+		false,
+	)...)
 	for idx := len(filtered) - 1; idx >= 0; idx-- {
 		entry := filtered[idx]
 		lines = append(lines, renderLogLine(entry.Timestamp, "", entry.Source, entry.Message, m.logFilterQuery, width))
@@ -1052,13 +1059,54 @@ func (m Model) renderStackLogLines(view app.StackView, width int) []string {
 		return []string{mutedStyle.Render(truncateText(m.tf("No stack logs match %q. Press Esc to clear the log filter.", "没有匹配 %q 的组合日志。按 Esc 清除日志筛选。", m.logFilterQuery), width))}
 	}
 
-	lines := make([]string, 0, len(activity))
+	lines := make([]string, 0, len(activity)+3)
+	lines = append(lines, m.renderLogSummaryLines(
+		m.tf(
+			"Showing %s logs from %s profiles • newest first",
+			"显示 %s 条日志，来自 %s 个配置 • 最新在前",
+			formatVisibleCount(len(activity), totalEntries),
+			formatVisibleCount(uniqueStackActivityProfiles(activity), len(view.Members)),
+		),
+		logSourceCountsForStackActivity(activity),
+		m.logFilterQuery,
+		width,
+		true,
+	)...)
 	for idx := len(activity) - 1; idx >= 0; idx-- {
 		entry := activity[idx]
 		lines = append(lines, renderLogLine(entry.Log.Timestamp, entry.ProfileName, entry.Log.Source, entry.Log.Message, m.logFilterQuery, width))
 	}
 
 	return lines
+}
+
+func (m Model) renderLogSummaryLines(summary string, counts logSourceCounts, query string, width int, includeProfiles bool) []string {
+	lines := []string{mutedStyle.Render(truncateText(summary, width))}
+	lines = append(lines, renderLogSourceCountLine(m.language(), counts, width))
+	if query != "" {
+		lines = append(lines, m.renderLogFilterSummaryLine(query, width, includeProfiles))
+	}
+	return lines
+}
+
+func renderLogSourceCountLine(language domain.Language, counts logSourceCounts, width int) string {
+	line := strings.Join([]string{
+		mutedStyle.Render(translate(language, "Sources", "来源")),
+		renderLogSourceBadge(domain.LogSourceSystem, "") + " " + mutedStyle.Render(fmt.Sprintf("%d", counts.system)),
+		renderLogSourceBadge(domain.LogSourceStdout, "") + " " + mutedStyle.Render(fmt.Sprintf("%d", counts.stdout)),
+		renderLogSourceBadge(domain.LogSourceStderr, "") + " " + mutedStyle.Render(fmt.Sprintf("%d", counts.stderr)),
+	}, "  ")
+	return truncateText(line, width)
+}
+
+func (m Model) renderLogFilterSummaryLine(query string, width int, includeProfiles bool) string {
+	fields := m.t("messages, sources", "消息、来源")
+	if includeProfiles {
+		fields = m.t("messages, sources, profiles", "消息、来源、profile")
+	}
+
+	text := m.tf("Filter: %s • %s", "筛选：%s • %s", query, fields)
+	return renderHighlightedText(truncateText(text, width), query, mutedStyle, filterMatchStyle)
 }
 
 func (m Model) normalizeSelection(profileCount, stackCount int) Model {
@@ -3436,6 +3484,12 @@ type stackActivityEntry struct {
 	Log         domain.LogEntry
 }
 
+type logSourceCounts struct {
+	system int
+	stdout int
+	stderr int
+}
+
 func recentStackActivity(view app.StackView, limit int) []stackActivityEntry {
 	entries := make([]stackActivityEntry, 0)
 	for _, member := range view.Members {
@@ -3462,6 +3516,47 @@ func recentStackActivity(view app.StackView, limit int) []stackActivityEntry {
 		return entries
 	}
 	return entries[len(entries)-limit:]
+}
+
+func logSourceCountsForEntries(entries []domain.LogEntry) logSourceCounts {
+	counts := logSourceCounts{}
+	for _, entry := range entries {
+		switch entry.Source {
+		case domain.LogSourceStdout:
+			counts.stdout++
+		case domain.LogSourceStderr:
+			counts.stderr++
+		default:
+			counts.system++
+		}
+	}
+	return counts
+}
+
+func logSourceCountsForStackActivity(entries []stackActivityEntry) logSourceCounts {
+	counts := logSourceCounts{}
+	for _, entry := range entries {
+		switch entry.Log.Source {
+		case domain.LogSourceStdout:
+			counts.stdout++
+		case domain.LogSourceStderr:
+			counts.stderr++
+		default:
+			counts.system++
+		}
+	}
+	return counts
+}
+
+func uniqueStackActivityProfiles(entries []stackActivityEntry) int {
+	names := make(map[string]struct{}, len(entries))
+	for _, entry := range entries {
+		if entry.ProfileName == "" {
+			continue
+		}
+		names[entry.ProfileName] = struct{}{}
+	}
+	return len(names)
 }
 
 func countActiveProfiles(views []app.ProfileView) int {

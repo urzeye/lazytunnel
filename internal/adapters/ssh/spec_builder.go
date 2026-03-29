@@ -35,13 +35,20 @@ func BuildProcessSpec(profile domain.Profile) (ltruntime.ProcessSpec, error) {
 			forward = fmt.Sprintf("%s:%s", profile.SSHRemote.BindAddress, forward)
 		}
 		spec.Args = append(spec.Args, "-R", forward, profile.SSHRemote.Host)
+	case domain.TunnelTypeSSHDynamic:
+		forward := fmt.Sprintf("%d", profile.LocalPort)
+		if profile.SSHDynamic.BindAddress != "" {
+			forward = fmt.Sprintf("%s:%s", profile.SSHDynamic.BindAddress, forward)
+		}
+		spec.Args = append(spec.Args, "-D", forward, profile.SSHDynamic.Host)
 	default:
 		return ltruntime.ProcessSpec{}, fmt.Errorf(
-			"profile %q is %q, want one of %q or %q",
+			"profile %q is %q, want one of %q, %q, or %q",
 			profile.Name,
 			profile.Type,
 			domain.TunnelTypeSSHLocal,
 			domain.TunnelTypeSSHRemote,
+			domain.TunnelTypeSSHDynamic,
 		)
 	}
 

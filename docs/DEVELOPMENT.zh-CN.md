@@ -8,6 +8,8 @@
 - 产品形态：本地优先的终端应用
 - v0.1 主要场景：
   - 用 `ssh -L` 做 SSH 本地转发
+  - 用 `ssh -R` 做 SSH 远程转发
+  - 用 `ssh -D` 做 SSH 动态 SOCKS
   - 用 `kubectl port-forward` 做 Kubernetes 端口转发
 - v0.1 的发布目标：
   - 通过 GitHub Releases 提供二进制
@@ -37,7 +39,7 @@
 
 - 保存 tunnel profile
 - 在 TUI 中启动和停止 profile
-- 支持 `ssh -L`
+- 支持 `ssh -L`、`ssh -R`、`ssh -D`
 - 支持 `kubectl port-forward`
 - 启动前检测本地端口冲突
 - 进程异常退出后自动重连
@@ -110,13 +112,13 @@ pkg/
 
 ### Milestone 4：SSH 支持
 
-- 从 profile 生成 `ssh -L` 命令
-- 校验主机、目标地址和本地端口
+- 从 profile 生成 `ssh -L`、`ssh -R`、`ssh -D` 命令
+- 按不同 SSH 类型校验本地监听、远端监听、目标地址和主机字段
 - 清晰展示常见启动失败原因
 
 完成标准：
 
-- 已保存的 SSH 本地转发 profile 可以从应用层启动
+- 已保存的 SSH 本地、远程和动态 profile 都可以从应用层启动
 
 ### Milestone 5：Kubernetes 支持
 
@@ -143,7 +145,7 @@ pkg/
 
 ### Milestone 7：发布
 
-- 增加 `goreleaser`
+- 维护并验证 `goreleaser` 发布自动化
 - 发布 macOS、Linux、Windows 二进制
 - 验证 mise 安装
 - 记录 Homebrew 为后续版本支持
@@ -185,16 +187,12 @@ pkg/
 暂不阻塞 `v0.1.0` 的事项：
 
 - Homebrew
-- `ssh -R`
-- `ssh -D`
-- 从 `~/.ssh/config` 和 Kubernetes context 导入
 - 日志面板的进一步格式、样式、过滤优化
-- 显式手动 restart 动作
+- README 截图和演示素材
 
 ## 接下来立刻要做的事
 
 - 打磨 TUI 里的日志格式、样式和过滤体验
-- 补强 stack 相关快捷键和操作提示
-- 增加从 `~/.ssh/config` 和 Kubernetes context 导入
-- 在日志和导入能力补齐后，再评估是否需要显式手动 restart 动作
-- 接入 `goreleaser` 自动发布
+- 补强 stack 相关键盘 / 鼠标交互和操作提示
+- 用带 tag 的版本验证 GitHub Releases 和 `mise` 安装链路
+- 为 README 补截图和演示 GIF

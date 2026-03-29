@@ -7,12 +7,9 @@
 LazyTunnel 是一个键盘优先的终端工作台，专门管理你每天会用到的各种隧道：
 
 - 用 `ssh -L` 建立的本地端口转发
-- 用 `kubectl port-forward` 建立的 Kubernetes 端口转发
-
-后续支持：
-
 - 用 `ssh -R` 建立的远程端口转发
 - 用 `ssh -D` 建立的 SOCKS 代理
+- 用 `kubectl port-forward` 建立的 Kubernetes 端口转发
 
 它的目标不是发明新的连接方式，而是把这些原本零散、重复、容易中断的命令，统一收进一个终端界面里管理。
 
@@ -86,6 +83,27 @@ lazytunnel profile add ssh-local \
   --remote-host db.internal \
   --remote-port 5432 \
   --local-port 5432
+```
+
+添加一个 SSH 远程转发 profile：
+
+```bash
+lazytunnel profile add ssh-remote \
+  --name public-api \
+  --host bastion-prod \
+  --bind-address 0.0.0.0 \
+  --bind-port 9000 \
+  --target-host 127.0.0.1 \
+  --target-port 8080
+```
+
+添加一个 SSH 动态 SOCKS profile：
+
+```bash
+lazytunnel profile add ssh-dynamic \
+  --name dev-socks \
+  --host bastion-prod \
+  --local-port 1080
 ```
 
 添加一个 Kubernetes 端口转发 profile：
@@ -177,19 +195,16 @@ LazyTunnel 围绕几个高频场景来设计：
 ## 当前支持的工作流
 
 - SSH 本地转发：`ssh -L`
-- Kubernetes `pod`、`service`、`deployment` 的端口转发
-
-## 后续支持
-
 - SSH 远程转发：`ssh -R`
 - SSH 动态代理：`ssh -D`
+- Kubernetes `pod`、`service`、`deployment` 的端口转发
 
 ## 近期路线
 
 - 在 TUI 里补齐更完整的运行状态、重连信息和日志视图
 - 优化日志面板的格式、样式和过滤体验
 - 继续增强按项目组织 stack、标签和预检查能力
-- 如果开始/停止还不够顺手，再补显式手动 restart 动作
+- 打磨 tag 版本下的 release 和安装体验
 
 ## 明确不做什么
 

@@ -92,3 +92,33 @@ func TestBuildProcessSpecBuildsSSHRemoteCommand(t *testing.T) {
 		t.Fatalf("unexpected args: %#v", spec.Args)
 	}
 }
+
+func TestBuildProcessSpecBuildsSSHDynamicCommand(t *testing.T) {
+	t.Parallel()
+
+	spec, err := BuildProcessSpec(domain.Profile{
+		Name:      "dev-socks",
+		Type:      domain.TunnelTypeSSHDynamic,
+		LocalPort: 1080,
+		Restart: domain.RestartPolicy{
+			Enabled: true,
+		},
+		SSHDynamic: &domain.SSHDynamic{
+			Host:        "bastion-prod",
+			BindAddress: "127.0.0.1",
+		},
+	})
+	if err != nil {
+		t.Fatalf("build spec: %v", err)
+	}
+
+	wantArgs := []string{
+		"-N",
+		"-o", "ExitOnForwardFailure=yes",
+		"-D", "127.0.0.1:1080",
+		"bastion-prod",
+	}
+	if !reflect.DeepEqual(spec.Args, wantArgs) {
+		t.Fatalf("unexpected args: %#v", spec.Args)
+	}
+}

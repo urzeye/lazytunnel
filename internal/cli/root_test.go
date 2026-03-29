@@ -128,6 +128,43 @@ func TestProfileAddSSHRemotePersistsProfile(t *testing.T) {
 	}
 }
 
+func TestProfileAddSSHDynamicPersistsProfile(t *testing.T) {
+	t.Parallel()
+
+	configPath := filepath.Join(t.TempDir(), "config.yaml")
+	if err := storage.SaveConfig(configPath, domain.DefaultConfig()); err != nil {
+		t.Fatalf("save config: %v", err)
+	}
+
+	output := executeCommand(t,
+		"--config", configPath,
+		"profile", "add", "ssh-dynamic",
+		"--name", "dev-socks",
+		"--host", "bastion-prod",
+		"--bind-address", "127.0.0.1",
+		"--local-port", "1080",
+	)
+
+	if !strings.Contains(output, "added profile dev-socks") {
+		t.Fatalf("unexpected output: %q", output)
+	}
+
+	cfg, err := storage.LoadConfig(configPath)
+	if err != nil {
+		t.Fatalf("load config: %v", err)
+	}
+
+	if got := len(cfg.Profiles); got != 1 {
+		t.Fatalf("expected 1 profile, got %d", got)
+	}
+	if got := cfg.Profiles[0].Type; got != domain.TunnelTypeSSHDynamic {
+		t.Fatalf("expected ssh_dynamic profile, got %q", got)
+	}
+	if cfg.Profiles[0].SSHDynamic == nil || cfg.Profiles[0].SSHDynamic.BindAddress != "127.0.0.1" || cfg.Profiles[0].LocalPort != 1080 {
+		t.Fatalf("unexpected ssh dynamic settings: %#v", cfg.Profiles[0].SSHDynamic)
+	}
+}
+
 func TestStackAddPersistsStack(t *testing.T) {
 	t.Parallel()
 
@@ -430,6 +467,57 @@ func TestProfileEditUpdatesSSHRemoteFields(t *testing.T) {
 	}
 	if edited.SSHRemote.TargetHost != "127.0.0.1" || edited.SSHRemote.TargetPort != 8443 {
 		t.Fatalf("unexpected target settings: %#v", edited.SSHRemote)
+	}
+}
+
+func TestProfileEditUpdatesSSHDynamicFields(t *testing.T) {
+	t.Parallel()
+
+	configPath := filepath.Join(t.TempDir(), "config.yaml")
+	cfg := domain.DefaultConfig()
+	cfg.Profiles = []domain.Profile{
+		{
+			Name:      "dev-socks",
+			Type:      domain.TunnelTypeSSHDynamic,
+			LocalPort: 1080,
+			SSHDynamic: &domain.SSHDynamic{
+				Host: "bastion-prod",
+			},
+		},
+	}
+	if err := storage.SaveConfig(configPath, cfg); err != nil {
+		t.Fatalf("save config: %v", err)
+	}
+
+	output := executeCommand(t,
+		"--config", configPath,
+		"profile", "edit", "dev-socks",
+		"--host", "bastion-staging",
+		"--bind-address", "127.0.0.1",
+		"--local-port", "2080",
+	)
+
+	if !strings.Contains(output, "updated profile dev-socks") {
+		t.Fatalf("unexpected output: %q", output)
+	}
+
+	persisted, err := storage.LoadConfig(configPath)
+	if err != nil {
+		t.Fatalf("load config: %v", err)
+	}
+
+	edited, exists := findProfile(persisted.Profiles, "dev-socks")
+	if !exists {
+		t.Fatal("expected edited profile to exist")
+	}
+	if edited.SSHDynamic == nil {
+		t.Fatal("expected ssh dynamic settings to exist")
+	}
+	if edited.SSHDynamic.Host != "bastion-staging" || edited.SSHDynamic.BindAddress != "127.0.0.1" {
+		t.Fatalf("unexpected SSH dynamic endpoint: %#v", edited.SSHDynamic)
+	}
+	if edited.LocalPort != 2080 {
+		t.Fatalf("expected local port 2080, got %d", edited.LocalPort)
 	}
 }
 

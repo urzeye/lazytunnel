@@ -8,6 +8,8 @@ This document turns the product roadmap into an execution plan.
 - target shape: local-first terminal application
 - primary use cases:
   - SSH local forwarding with `ssh -L`
+  - SSH remote forwarding with `ssh -R`
+  - SSH dynamic SOCKS with `ssh -D`
   - Kubernetes port-forwarding with `kubectl port-forward`
 - release goal for v0.1:
   - downloadable binaries from GitHub Releases
@@ -37,7 +39,7 @@ The first version should support one excellent happy path:
 
 - save tunnel profiles
 - start and stop profiles from the TUI
-- support `ssh -L`
+- support `ssh -L`, `ssh -R`, and `ssh -D`
 - support `kubectl port-forward`
 - detect local port conflicts before launch
 - auto-reconnect unexpected exits
@@ -110,13 +112,13 @@ Exit criteria:
 
 ### Milestone 4: SSH Support
 
-- generate `ssh -L` commands from a profile
-- validate host, target, and local port
+- generate `ssh -L`, `ssh -R`, and `ssh -D` commands from a profile
+- validate local bind, remote bind, host, and target fields as appropriate
 - surface common launch failures clearly
 
 Exit criteria:
 
-- a saved SSH local-forward profile can be started from the app layer
+- saved SSH local, remote, and dynamic profiles can be started from the app layer
 
 ### Milestone 5: Kubernetes Support
 
@@ -143,7 +145,7 @@ Exit criteria:
 
 ### Milestone 7: Packaging
 
-- add `goreleaser`
+- maintain and verify `goreleaser` release automation
 - publish binaries for macOS, Linux, and Windows
 - verify `mise` installation
 - record Homebrew as post-v0.1.0 packaging work
@@ -185,16 +187,12 @@ The recommended `v0.1.0` release scope is:
 The following should not block `v0.1.0`:
 
 - Homebrew
-- `ssh -R`
-- `ssh -D`
-- imports from `~/.ssh/config` and Kubernetes contexts
 - deeper log formatting, styling, and filtering polish
-- an explicit manual restart action
+- screenshots and demo assets
 
 ## Immediate Next Steps
 
 - improve log formatting, visual hierarchy, and filtering in the TUI
-- add stack-focused keyboard polish and clearer action hints
-- import from `~/.ssh/config` and Kubernetes contexts
-- evaluate whether an explicit manual restart action is still needed after log/import polish
-- add release automation with `goreleaser`
+- add stack-focused keyboard and mouse polish with clearer action hints
+- exercise a tagged release through GitHub Releases and `mise`
+- capture screenshots and demo GIFs for the README

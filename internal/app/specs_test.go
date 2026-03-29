@@ -72,6 +72,26 @@ func TestBuildProcessSpecDispatchesSSHRemoteProfile(t *testing.T) {
 	}
 }
 
+func TestBuildProcessSpecDispatchesSSHDynamicProfile(t *testing.T) {
+	t.Parallel()
+
+	spec, err := BuildProcessSpec(domain.Profile{
+		Name:      "dev-socks",
+		Type:      domain.TunnelTypeSSHDynamic,
+		LocalPort: 1080,
+		SSHDynamic: &domain.SSHDynamic{
+			Host: "bastion-prod",
+		},
+	})
+	if err != nil {
+		t.Fatalf("build spec: %v", err)
+	}
+
+	if spec.Command != "ssh" {
+		t.Fatalf("expected ssh command, got %q", spec.Command)
+	}
+}
+
 func TestBuildProcessSpecRejectsUnsupportedType(t *testing.T) {
 	t.Parallel()
 

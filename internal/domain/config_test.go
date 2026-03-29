@@ -148,6 +148,27 @@ func TestProfileValidateAcceptsSSHRemoteProfile(t *testing.T) {
 	}
 }
 
+func TestProfileValidateAcceptsSSHDynamicProfile(t *testing.T) {
+	t.Parallel()
+
+	profile := Profile{
+		Name:      "dev-socks",
+		Type:      TunnelTypeSSHDynamic,
+		LocalPort: 1080,
+		Restart: RestartPolicy{
+			Enabled: true,
+		},
+		SSHDynamic: &SSHDynamic{
+			Host:        "bastion-prod",
+			BindAddress: "127.0.0.1",
+		},
+	}
+
+	if err := profile.Validate(); err != nil {
+		t.Fatalf("expected SSH dynamic profile to validate, got %v", err)
+	}
+}
+
 func TestConfigValidateRejectsUnsupportedLanguage(t *testing.T) {
 	t.Parallel()
 

@@ -9,7 +9,7 @@
 第一版只做一个很小但很有价值的切口：
 
 - 创建并保存 tunnel profile
-- 支持 `ssh -L`
+- 支持 `ssh -L`、`ssh -R`、`ssh -D`
 - 支持 `kubectl port-forward`
 - 检测本地端口冲突
 - 进程意外退出后自动重连
@@ -21,7 +21,7 @@
 ### v0.1
 
 - 本地优先 TUI
-- SSH 本地转发
+- SSH 本地、远程和动态转发
 - Kubernetes 端口转发
 - stack 启动
 - 自动重连和基础日志
@@ -31,12 +31,10 @@
 - Homebrew 支持
 - `aqua` / registry 接入
 - 打磨 TUI 日志面板的格式、样式和过滤
-- 如果体验上仍然有明显缺口，再补显式手动 restart 动作
+- 继续打磨 TUI 交互体验
 
 ### v0.2
 
-- `ssh -R`
-- `ssh -D`
 - 更好的健康检查
 
 ### v0.3
@@ -48,4 +46,4 @@
 ## 当前重点
 
 - 优化日志面板的格式、样式和过滤体验
-- 继续把 `ssh -L` 和 `kubectl port-forward` 这两个核心工作流打磨到足够顺手
+- 继续把 SSH 和 `kubectl port-forward` 这两类核心工作流打磨到足够顺手
