@@ -10,6 +10,7 @@ import (
 
 	tea "github.com/charmbracelet/bubbletea"
 	"github.com/charmbracelet/lipgloss"
+	"github.com/charmbracelet/x/ansi"
 
 	"github.com/urzeye/lazytunnel/internal/app"
 	"github.com/urzeye/lazytunnel/internal/domain"
@@ -208,6 +209,45 @@ type deleteRequest struct {
 	Message string
 }
 
+type mouseRect struct {
+	x      int
+	y      int
+	width  int
+	height int
+}
+
+func (r mouseRect) contains(x, y int) bool {
+	return x >= r.x && x < r.x+r.width && y >= r.y && y < r.y+r.height
+}
+
+type mouseListRegion struct {
+	panel   mouseRect
+	visible bool
+	start   int
+	end     int
+	focus   listFocus
+}
+
+type mouseInspectorTabRegion struct {
+	rect  mouseRect
+	tab   inspectorTab
+	scope filterScope
+}
+
+type mouseImportActionRegion struct {
+	rect   mouseRect
+	action string
+}
+
+type mouseLayout struct {
+	headerFilter  mouseRect
+	profiles      mouseListRegion
+	stacks        mouseListRegion
+	inspector     mouseRect
+	inspectorTabs []mouseInspectorTabRegion
+	importActions []mouseImportActionRegion
+}
+
 type Model struct {
 	service         *app.Service
 	configPath      string
@@ -268,6 +308,17 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 
 		m = m.reloadConfigFromDisk(m.t("Reloaded config after editing.", "编辑完成后已重新加载配置。"))
 		return m, nil
+
+	case tea.MouseMsg:
+		profiles := filterProfileViews(m.service.ProfileViews(), m.filterQuery)
+		stacks := filterStackViews(m.service.StackViews(), m.filterQuery)
+		m = m.normalizeSelection(len(profiles), len(stacks))
+
+		var handled bool
+		m, handled = m.handleMouse(msg, profiles, stacks)
+		if handled {
+			return m, nil
+		}
 
 	case tea.KeyMsg:
 		profiles := filterProfileViews(m.service.ProfileViews(), m.filterQuery)
@@ -482,7 +533,7 @@ func (m Model) renderStatusLine(width int) string {
 	case m.pendingDelete != nil:
 		return renderInlineBanner(deletePromptStyle, m.pendingDelete.Message, width)
 	case m.importMode:
-		return renderInlineBanner(importPromptStyle, m.t("Import drafts: s SSH config, k kube contexts, a both, Esc cancel.", "导入草稿: s SSH 配置，k Kubernetes context，a 全部导入，Esc 取消。"), width)
+		return renderInlineBanner(importPromptStyle, m.importPromptMessage(), width)
 	case m.lastError != "":
 		return renderInlineBanner(errorBannerStyle, m.t("Last error: ", "最近错误: ")+m.lastError, width)
 	case m.lastNotice != "":
@@ -582,6 +633,10 @@ func (m Model) hintMessage() string {
 			m.t("q quit", "q 退出"),
 		)
 	}
+}
+
+func (m Model) importPromptMessage() string {
+	return m.t("Import drafts: s SSH config, k kube contexts, a both, Esc cancel.", "导入草稿: s SSH 配置，k Kubernetes context，a 全部导入，Esc 取消。")
 }
 
 func joinHintParts(parts ...string) string {
@@ -1485,6 +1540,86 @@ func (m Model) handleDeleteKey(msg tea.KeyMsg, profiles []app.ProfileView, stack
 	}
 }
 
+func (m Model) handleMouse(msg tea.MouseMsg, profiles []app.ProfileView, stacks []app.StackView) (Model, bool) {
+	layout := m.mouseLayout(profiles, stacks)
+
+	if m.pendingDelete != nil {
+		return m, false
+	}
+
+	if msg.Button == tea.MouseButtonWheelUp || msg.Button == tea.MouseButtonWheelDown {
+		if layout.inspector.contains(msg.X, msg.Y) {
+			m = m.scrollInspectorMouse(msg.Button, profiles, stacks)
+			return m, true
+		}
+		return m, false
+	}
+
+	if msg.Action != tea.MouseActionPress || msg.Button != tea.MouseButtonLeft {
+		return m, false
+	}
+
+	if m.importMode {
+		for _, region := range layout.importActions {
+			if !region.rect.contains(msg.X, msg.Y) {
+				continue
+			}
+
+			switch region.action {
+			case "ssh":
+				m = m.importSSHDraftProfiles()
+			case "kube":
+				m = m.importKubernetesDraftProfiles()
+			case "all":
+				m = m.importAllDraftProfiles()
+			}
+			return m, true
+		}
+		return m, false
+	}
+
+	if layout.headerFilter.contains(msg.X, msg.Y) {
+		m.lastNotice = ""
+		m.filterMode = true
+		m.filterScope = m.defaultFilterScope()
+		return m, true
+	}
+
+	for _, tab := range layout.inspectorTabs {
+		if !tab.rect.contains(msg.X, msg.Y) {
+			continue
+		}
+
+		if tab.scope == filterScopeLogs {
+			m.filterMode = true
+			m.filterScope = filterScopeLogs
+			return m, true
+		}
+
+		if m.inspectorTab != tab.tab {
+			m.inspectorTab = tab.tab
+			m.inspectorScroll = 0
+		}
+		return m, true
+	}
+
+	if idx, ok := layout.profiles.rowIndexAt(msg.X, msg.Y); ok {
+		m.focus = focusProfiles
+		m.selectedProfile = idx
+		m.inspectorScroll = 0
+		return m, true
+	}
+
+	if idx, ok := layout.stacks.rowIndexAt(msg.X, msg.Y); ok {
+		m.focus = focusStacks
+		m.selectedStack = idx
+		m.inspectorScroll = 0
+		return m, true
+	}
+
+	return m, false
+}
+
 func (m Model) handleImportKey(msg tea.KeyMsg) (Model, bool) {
 	switch msg.String() {
 	case "esc":
@@ -1503,6 +1638,22 @@ func (m Model) handleImportKey(msg tea.KeyMsg) (Model, bool) {
 	default:
 		return m, true
 	}
+}
+
+func (m Model) scrollInspectorMouse(button tea.MouseButton, profiles []app.ProfileView, stacks []app.StackView) Model {
+	delta := max(1, m.inspectorPageSize()/4)
+	total := len(m.currentInspectorLines(profiles, stacks, panelInnerWidth(m.inspectorPanelRect().width)))
+	pageSize := m.inspectorPageSize()
+	maxScroll := max(0, total-pageSize)
+
+	switch button {
+	case tea.MouseButtonWheelUp:
+		m.inspectorScroll = max(0, m.inspectorScroll-delta)
+	case tea.MouseButtonWheelDown:
+		m.inspectorScroll = min(maxScroll, m.inspectorScroll+delta)
+	}
+
+	return m
 }
 
 func (m Model) buildDeleteRequest(profiles []app.ProfileView, stacks []app.StackView) *deleteRequest {
@@ -1636,6 +1787,18 @@ func (m Model) showHint() bool {
 
 func (m Model) hasStatusLine() bool {
 	return m.pendingDelete != nil || m.importMode || m.lastError != "" || m.lastNotice != ""
+}
+
+func (m Model) contentOrigin() (int, int) {
+	return appStyle.GetPaddingLeft(), appStyle.GetPaddingTop()
+}
+
+func panelContentX(rect mouseRect) int {
+	return rect.x + panelStyle.GetBorderLeftSize() + panelStyle.GetPaddingLeft()
+}
+
+func panelBodyStartY(rect mouseRect) int {
+	return rect.y + panelStyle.GetBorderTopSize() + panelStyle.GetPaddingTop() + 1
 }
 
 func (m Model) chromeLineCount() int {
@@ -1858,6 +2021,170 @@ func (m Model) renderHeaderFilterSegment(inputWidth int) string {
 		" ",
 		renderSizedBlock(inputStyle, inputWidth, content),
 	)
+}
+
+func (m Model) mouseLayout(profiles []app.ProfileView, stacks []app.StackView) mouseLayout {
+	contentX, contentY := m.contentOrigin()
+	width := m.contentWidth()
+	headerLines := m.renderHeaderLines(profiles, stacks, len(m.service.ProfileViews()), len(m.service.StackViews()), width)
+	headerHeight := renderedLinesHeight(headerLines, width)
+	filterY := contentY
+	if len(headerLines) > 0 {
+		filterY += renderedLineHeight(headerLines[0], width)
+	}
+
+	filterSegment := m.renderHeaderFilterSegment(preferredFilterInputWidth(width))
+	layout := mouseLayout{
+		headerFilter: mouseRect{
+			x:      contentX,
+			y:      filterY,
+			width:  lipgloss.Width(filterSegment),
+			height: 1,
+		},
+	}
+
+	statusY := contentY + headerHeight
+	if m.importMode {
+		layout.importActions = m.importActionRegions(contentX, statusY, width)
+	}
+
+	bodyY := statusY
+	if status := m.renderStatusLine(width); status != "" {
+		bodyY += renderedLineHeight(status, width)
+	}
+	bodyHeight := m.bodyHeight()
+
+	if m.useTwoColumnLayout(width, bodyHeight) {
+		leftWidth := min(44, max(36, width/3))
+		rightWidth := max(32, width-leftWidth-1)
+		profilesHeight, stacksHeight := splitDualListHeights(bodyHeight)
+
+		layout.profiles = buildMouseListRegion(contentX, bodyY, leftWidth, profilesHeight, len(profiles), m.selectedProfile, focusProfiles, true)
+		layout.stacks = buildMouseListRegion(contentX, bodyY+profilesHeight+1, leftWidth, stacksHeight, len(stacks), m.selectedStack, focusStacks, true)
+		layout.inspector = mouseRect{x: contentX + leftWidth + 1, y: bodyY, width: rightWidth, height: bodyHeight}
+		layout.inspectorTabs = m.inspectorTabRegions(layout.inspector)
+		return layout
+	}
+
+	listHeight, inspectorHeight := splitListInspectorHeights(bodyHeight)
+	if m.focus == focusStacks {
+		layout.stacks = buildMouseListRegion(contentX, bodyY, width, listHeight, len(stacks), m.selectedStack, focusStacks, true)
+	} else {
+		layout.profiles = buildMouseListRegion(contentX, bodyY, width, listHeight, len(profiles), m.selectedProfile, focusProfiles, true)
+	}
+	layout.inspector = mouseRect{x: contentX, y: bodyY + listHeight + 1, width: width, height: inspectorHeight}
+	layout.inspectorTabs = m.inspectorTabRegions(layout.inspector)
+	return layout
+}
+
+func buildMouseListRegion(x, y, width, height, total, selected int, focus listFocus, visible bool) mouseListRegion {
+	bodyHeight := panelBodyHeight(height)
+	start, end := windowAroundSelection(total, selected, bodyHeight)
+	return mouseListRegion{
+		panel:   mouseRect{x: x, y: y, width: width, height: height},
+		visible: visible,
+		start:   start,
+		end:     end,
+		focus:   focus,
+	}
+}
+
+func (r mouseListRegion) rowIndexAt(x, y int) (int, bool) {
+	if !r.visible || !r.panel.contains(x, y) {
+		return 0, false
+	}
+
+	row := y - panelBodyStartY(r.panel)
+	if row < 0 {
+		return 0, false
+	}
+
+	idx := r.start + row
+	if idx >= r.end {
+		return 0, false
+	}
+
+	return idx, true
+}
+
+func (m Model) inspectorPanelRect() mouseRect {
+	profiles := filterProfileViews(m.service.ProfileViews(), m.filterQuery)
+	stacks := filterStackViews(m.service.StackViews(), m.filterQuery)
+	layout := m.mouseLayout(profiles, stacks)
+	return layout.inspector
+}
+
+func (m Model) inspectorTabRegions(panel mouseRect) []mouseInspectorTabRegion {
+	innerX := panelContentX(panel)
+	y := panelBodyStartY(panel)
+	x := innerX
+
+	type tabDef struct {
+		key   string
+		label string
+		tab   inspectorTab
+		scope filterScope
+	}
+
+	defs := []tabDef{
+		{key: "h", label: m.t("Details", "详情"), tab: inspectorTabDetails},
+		{key: "l", label: m.t("Logs", "日志"), tab: inspectorTabLogs},
+	}
+	if m.inspectorTab == inspectorTabLogs || m.logFilterQuery != "" {
+		defs = append(defs, tabDef{key: "/", label: m.t("filter", "筛选"), scope: filterScopeLogs})
+	}
+
+	regions := make([]mouseInspectorTabRegion, 0, len(defs))
+	for _, def := range defs {
+		active := def.scope == filterScopeLogs && m.filterMode && m.activeFilterScope() == filterScopeLogs
+		if def.scope != filterScopeLogs {
+			active = def.tab == m.inspectorTab
+		}
+
+		width := lipgloss.Width(renderInspectorTab(def.key, def.label, active))
+		regions = append(regions, mouseInspectorTabRegion{
+			rect:  mouseRect{x: x, y: y, width: width, height: 1},
+			tab:   def.tab,
+			scope: def.scope,
+		})
+		x += width + 1
+	}
+
+	return regions
+}
+
+func (m Model) importActionRegions(contentX, y, width int) []mouseImportActionRegion {
+	text := truncateText(m.importPromptMessage(), max(1, width-importPromptStyle.GetHorizontalFrameSize()))
+	startX := contentX + importPromptStyle.GetPaddingLeft()
+
+	actions := []struct {
+		action string
+		text   string
+	}{
+		{action: "ssh", text: m.t("s SSH config", "s SSH 配置")},
+		{action: "kube", text: m.t("k kube contexts", "k Kubernetes context")},
+		{action: "all", text: m.t("a both", "a 全部导入")},
+	}
+
+	regions := make([]mouseImportActionRegion, 0, len(actions))
+	for _, action := range actions {
+		idx := strings.Index(text, action.text)
+		if idx < 0 {
+			continue
+		}
+
+		regions = append(regions, mouseImportActionRegion{
+			rect: mouseRect{
+				x:      startX + lipgloss.Width(text[:idx]),
+				y:      y,
+				width:  lipgloss.Width(action.text),
+				height: 1,
+			},
+			action: action.action,
+		})
+	}
+
+	return regions
 }
 
 func (m Model) defaultFilterScope() filterScope {
@@ -3159,16 +3486,24 @@ func tailLogs(entries []domain.LogEntry, limit int) []domain.LogEntry {
 
 func truncateText(value string, limit int) string {
 	if limit <= 0 {
-		return value
+		return ""
 	}
 
-	runes := []rune(value)
-	if len(runes) <= limit {
-		return value
-	}
-	if limit <= 1 {
-		return string(runes[:limit])
+	return ansi.Truncate(value, limit, "…")
+}
+
+func renderedLineHeight(line string, width int) int {
+	if width <= 0 {
+		return 1
 	}
 
-	return string(runes[:limit-1]) + "…"
+	return max(1, (ansi.StringWidth(line)+width-1)/width)
+}
+
+func renderedLinesHeight(lines []string, width int) int {
+	total := 0
+	for _, line := range lines {
+		total += renderedLineHeight(line, width)
+	}
+	return total
 }

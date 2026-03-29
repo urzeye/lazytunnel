@@ -1,6 +1,7 @@
 package tui
 
 import (
+	"fmt"
 	"os"
 	"path/filepath"
 	"strings"
@@ -9,6 +10,7 @@ import (
 
 	tea "github.com/charmbracelet/bubbletea"
 	"github.com/charmbracelet/lipgloss"
+	"github.com/charmbracelet/x/ansi"
 	"github.com/urzeye/lazytunnel/internal/app"
 	"github.com/urzeye/lazytunnel/internal/domain"
 	ltruntime "github.com/urzeye/lazytunnel/internal/runtime"
@@ -418,6 +420,45 @@ func TestRenderHeaderFilterSegmentUsesLogContextInLogsTab(t *testing.T) {
 	}
 	if !strings.Contains(got, "message, source, profile") {
 		t.Fatalf("expected log filter placeholder, got %q", got)
+	}
+}
+
+func TestTruncateTextUsesDisplayWidthForWideCharacters(t *testing.T) {
+	t.Parallel()
+
+	got := truncateText("配置组合日志关键字", 8)
+
+	if width := ansi.StringWidth(got); width > 8 {
+		t.Fatalf("expected truncated width <= 8, got %d (%q)", width, got)
+	}
+	if !strings.HasSuffix(got, "…") {
+		t.Fatalf("expected wide-character truncation to add ellipsis, got %q", got)
+	}
+}
+
+func TestChineseViewDoesNotOverflowViewportWidth(t *testing.T) {
+	t.Parallel()
+
+	cfg := domain.DefaultConfig()
+	cfg.Language = domain.LanguageSimplifiedChinese
+
+	service, err := app.NewService(cfg, newStubRuntimeController())
+	if err != nil {
+		t.Fatalf("new service: %v", err)
+	}
+
+	model := Model{
+		service:    service,
+		configPath: "/Users/urzeye/workspace/lazytunnel/config.yaml",
+		width:      72,
+		height:     20,
+		importMode: true,
+	}
+
+	for idx, line := range strings.Split(model.View(), "\n") {
+		if width := ansi.StringWidth(line); width > model.width {
+			t.Fatalf("expected rendered line %d to fit width %d, got %d (%q)", idx, model.width, width, line)
+		}
 	}
 }
 
@@ -1435,6 +1476,223 @@ func TestHandleImportKeyImportsSSHDrafts(t *testing.T) {
 	}
 	if got := next.service.ProfileViews()[0].Profile.Name; got != "bastion-prod" {
 		t.Fatalf("expected imported profile bastion-prod, got %q", got)
+	}
+}
+
+func TestHandleMouseClickSelectsProfileAndStackRows(t *testing.T) {
+	t.Parallel()
+
+	service, err := app.NewService(storage.SampleConfig(), newStubRuntimeController())
+	if err != nil {
+		t.Fatalf("new service: %v", err)
+	}
+
+	model := Model{service: service, width: 140, height: 30}
+	profiles := filterProfileViews(service.ProfileViews(), "")
+	stacks := filterStackViews(service.StackViews(), "")
+	layout := model.mouseLayout(profiles, stacks)
+
+	profileMsg := tea.MouseMsg{
+		X:      panelContentX(layout.profiles.panel) + 1,
+		Y:      panelBodyStartY(layout.profiles.panel) + 1,
+		Action: tea.MouseActionPress,
+		Button: tea.MouseButtonLeft,
+	}
+	next, handled := model.handleMouse(profileMsg, profiles, stacks)
+	if !handled {
+		t.Fatal("expected profile row click to be handled")
+	}
+	if next.focus != focusProfiles || next.selectedProfile != 1 {
+		t.Fatalf("expected second profile to be selected, got focus=%v selectedProfile=%d", next.focus, next.selectedProfile)
+	}
+
+	stackMsg := tea.MouseMsg{
+		X:      panelContentX(layout.stacks.panel) + 1,
+		Y:      panelBodyStartY(layout.stacks.panel),
+		Action: tea.MouseActionPress,
+		Button: tea.MouseButtonLeft,
+	}
+	next, handled = next.handleMouse(stackMsg, profiles, stacks)
+	if !handled {
+		t.Fatal("expected stack row click to be handled")
+	}
+	if next.focus != focusStacks || next.selectedStack != 0 {
+		t.Fatalf("expected stack to be focused and selected, got focus=%v selectedStack=%d", next.focus, next.selectedStack)
+	}
+}
+
+func TestHandleMouseClickSwitchesInspectorTab(t *testing.T) {
+	t.Parallel()
+
+	service, err := app.NewService(storage.SampleConfig(), newStubRuntimeController())
+	if err != nil {
+		t.Fatalf("new service: %v", err)
+	}
+
+	model := Model{service: service, width: 140, height: 30}
+	profiles := filterProfileViews(service.ProfileViews(), "")
+	stacks := filterStackViews(service.StackViews(), "")
+	layout := model.mouseLayout(profiles, stacks)
+
+	var logsRegion mouseInspectorTabRegion
+	found := false
+	for _, region := range layout.inspectorTabs {
+		if region.tab == inspectorTabLogs {
+			logsRegion = region
+			found = true
+			break
+		}
+	}
+	if !found {
+		t.Fatal("expected logs tab region")
+	}
+
+	msg := tea.MouseMsg{
+		X:      logsRegion.rect.x + 1,
+		Y:      logsRegion.rect.y,
+		Action: tea.MouseActionPress,
+		Button: tea.MouseButtonLeft,
+	}
+	next, handled := model.handleMouse(msg, profiles, stacks)
+	if !handled {
+		t.Fatal("expected tab click to be handled")
+	}
+	if next.inspectorTab != inspectorTabLogs {
+		t.Fatalf("expected logs tab to become active, got %v", next.inspectorTab)
+	}
+}
+
+func TestHandleMouseWheelScrollsInspector(t *testing.T) {
+	t.Parallel()
+
+	logs := make([]domain.LogEntry, 0, 40)
+	base := time.Date(2026, 3, 30, 10, 0, 0, 0, time.UTC)
+	for i := 0; i < 40; i++ {
+		logs = append(logs, domain.LogEntry{
+			Timestamp: base.Add(time.Duration(i) * time.Second),
+			Source:    domain.LogSourceStdout,
+			Message:   fmt.Sprintf("log line %02d", i),
+		})
+	}
+
+	runtime := newStubRuntimeController()
+	runtime.states["prod-db"] = domain.RuntimeState{
+		ProfileName: "prod-db",
+		Status:      domain.TunnelStatusRunning,
+		RecentLogs:  logs,
+	}
+
+	cfg := domain.Config{
+		Version: domain.CurrentConfigVersion,
+		Profiles: []domain.Profile{
+			{
+				Name:      "prod-db",
+				Type:      domain.TunnelTypeSSHLocal,
+				LocalPort: 15432,
+				SSH: &domain.SSHLocal{
+					Host:       "bastion-prod",
+					RemoteHost: "db.internal",
+					RemotePort: 5432,
+				},
+			},
+		},
+	}
+
+	service, err := app.NewService(cfg, runtime)
+	if err != nil {
+		t.Fatalf("new service: %v", err)
+	}
+
+	model := Model{service: service, width: 140, height: 30, inspectorTab: inspectorTabLogs}
+	profiles := filterProfileViews(service.ProfileViews(), "")
+	stacks := filterStackViews(service.StackViews(), "")
+	layout := model.mouseLayout(profiles, stacks)
+
+	msg := tea.MouseMsg{
+		X:      panelContentX(layout.inspector) + 1,
+		Y:      panelBodyStartY(layout.inspector) + 2,
+		Action: tea.MouseActionPress,
+		Button: tea.MouseButtonWheelDown,
+	}
+	next, handled := model.handleMouse(msg, profiles, stacks)
+	if !handled {
+		t.Fatal("expected wheel event to be handled")
+	}
+	if next.inspectorScroll <= 0 {
+		t.Fatalf("expected inspector scroll to increase, got %d", next.inspectorScroll)
+	}
+}
+
+func TestHandleMouseClickActivatesHeaderFilter(t *testing.T) {
+	t.Parallel()
+
+	service, err := app.NewService(storage.SampleConfig(), newStubRuntimeController())
+	if err != nil {
+		t.Fatalf("new service: %v", err)
+	}
+
+	model := Model{service: service, width: 140, height: 30}
+	profiles := filterProfileViews(service.ProfileViews(), "")
+	stacks := filterStackViews(service.StackViews(), "")
+	layout := model.mouseLayout(profiles, stacks)
+
+	msg := tea.MouseMsg{
+		X:      layout.headerFilter.x + 1,
+		Y:      layout.headerFilter.y,
+		Action: tea.MouseActionPress,
+		Button: tea.MouseButtonLeft,
+	}
+	next, handled := model.handleMouse(msg, profiles, stacks)
+	if !handled {
+		t.Fatal("expected filter click to be handled")
+	}
+	if !next.filterMode || next.filterScope != filterScopeList {
+		t.Fatalf("expected list filter mode to activate, got mode=%v scope=%v", next.filterMode, next.filterScope)
+	}
+}
+
+func TestHandleMouseClickTriggersImportPromptAction(t *testing.T) {
+	homeDir := t.TempDir()
+	sshDir := filepath.Join(homeDir, ".ssh")
+	if err := os.MkdirAll(sshDir, 0o755); err != nil {
+		t.Fatalf("mkdir ssh dir: %v", err)
+	}
+	sshConfigPath := filepath.Join(sshDir, "config")
+	if err := os.WriteFile(sshConfigPath, []byte("Host bastion-prod\n  HostName bastion.internal\n"), 0o644); err != nil {
+		t.Fatalf("write ssh config: %v", err)
+	}
+	t.Setenv("HOME", homeDir)
+
+	configPath := filepath.Join(t.TempDir(), "config.yaml")
+	service, err := app.NewService(domain.DefaultConfig(), newStubRuntimeController())
+	if err != nil {
+		t.Fatalf("new service: %v", err)
+	}
+
+	model := Model{service: service, configPath: configPath, importMode: true, width: 140, height: 30}
+	profiles := filterProfileViews(service.ProfileViews(), "")
+	stacks := filterStackViews(service.StackViews(), "")
+	layout := model.mouseLayout(profiles, stacks)
+
+	if len(layout.importActions) == 0 {
+		t.Fatal("expected import actions to be clickable")
+	}
+
+	msg := tea.MouseMsg{
+		X:      layout.importActions[0].rect.x + 1,
+		Y:      layout.importActions[0].rect.y,
+		Action: tea.MouseActionPress,
+		Button: tea.MouseButtonLeft,
+	}
+	next, handled := model.handleMouse(msg, profiles, stacks)
+	if !handled {
+		t.Fatal("expected import click to be handled")
+	}
+	if next.importMode {
+		t.Fatal("expected import mode to exit after click")
+	}
+	if len(next.service.ProfileViews()) != 1 {
+		t.Fatalf("expected 1 imported profile, got %d", len(next.service.ProfileViews()))
 	}
 }
 

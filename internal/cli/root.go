@@ -34,6 +34,7 @@ func NewRootCommand() *cobra.Command {
 			program := tea.NewProgram(
 				tui.NewModel(service, configPath),
 				tea.WithAltScreen(),
+				tea.WithMouseCellMotion(),
 			)
 
 			if _, err := program.Run(); err != nil {
