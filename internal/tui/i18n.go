@@ -197,16 +197,11 @@ func profileRemoteBind(profile domain.Profile) string {
 }
 
 func stackMembersSummary(language domain.Language, view app.StackView) string {
-	if len(view.Members) == 0 {
+	if len(view.Stack.Profiles) == 0 {
 		return translate(language, "no members", "无成员")
 	}
 
-	names := make([]string, 0, len(view.Members))
-	for _, member := range view.Members {
-		names = append(names, member.Profile.Name)
-	}
-
-	return strings.Join(names, ", ")
+	return strings.Join(view.Stack.Profiles, ", ")
 }
 
 func profileStartSummary(language domain.Language, status app.StartReadiness) string {

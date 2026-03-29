@@ -395,6 +395,7 @@ func TestRenderLogLineShowsProfileBadgeAndNormalizedMessage(t *testing.T) {
 		"api-debug",
 		domain.LogSourceStderr,
 		"boom\nsecond line",
+		"",
 		120,
 	)
 
@@ -540,6 +541,30 @@ func TestFilterStackViewsMatchesMembersAndLabels(t *testing.T) {
 	}
 }
 
+func TestFilterStackViewsMatchesStackNameAndDeclaredProfiles(t *testing.T) {
+	t.Parallel()
+
+	views := []app.StackView{
+		{
+			Stack: domain.Stack{
+				Name:     "backend-dev",
+				Profiles: []string{"prod-db", "missing-worker"},
+			},
+			Members: []app.ProfileView{
+				{Profile: domain.Profile{Name: "prod-db"}},
+			},
+		},
+	}
+
+	if got := filterStackViews(views, "backend-dev"); len(got) != 1 || got[0].Stack.Name != "backend-dev" {
+		t.Fatalf("expected stack-name filter to match backend-dev, got %#v", got)
+	}
+
+	if got := filterStackViews(views, "missing-worker"); len(got) != 1 || got[0].Stack.Name != "backend-dev" {
+		t.Fatalf("expected declared-member filter to match backend-dev, got %#v", got)
+	}
+}
+
 func TestFilterLogEntriesMatchesMessageAndSource(t *testing.T) {
 	t.Parallel()
 
@@ -583,6 +608,88 @@ func TestFilterStackActivityMatchesProfileName(t *testing.T) {
 
 	if got := filterStackActivity(entries, "api-debug"); len(got) != 1 || got[0].ProfileName != "api-debug" {
 		t.Fatalf("expected profile-name filter to match api-debug, got %#v", got)
+	}
+}
+
+func TestRenderProfileRowHighlightsMatchedFilter(t *testing.T) {
+	t.Parallel()
+
+	model := Model{filterQuery: "prod"}
+	row := model.renderProfileRow(app.ProfileView{
+		Profile: domain.Profile{
+			Name:      "prod-db",
+			Type:      domain.TunnelTypeSSHLocal,
+			LocalPort: 5432,
+			SSH: &domain.SSHLocal{
+				Host:       "bastion-prod",
+				RemoteHost: "db.internal",
+				RemotePort: 5432,
+			},
+		},
+	}, false, true, 80)
+
+	if !strings.Contains(row, filterMatchStyle.Render("prod")) {
+		t.Fatalf("expected highlighted profile match, got %q", row)
+	}
+}
+
+func TestRenderStackRowHighlightsMatchedFilter(t *testing.T) {
+	t.Parallel()
+
+	model := Model{filterQuery: "api"}
+	row := model.renderStackRow(app.StackView{
+		Stack: domain.Stack{
+			Name:     "backend-dev",
+			Profiles: []string{"prod-db", "api-debug"},
+		},
+		Members: []app.ProfileView{
+			{Profile: domain.Profile{Name: "prod-db"}},
+			{Profile: domain.Profile{Name: "api-debug"}},
+		},
+	}, false, true, 80)
+
+	if !strings.Contains(row, filterMatchStyle.Render("api")) {
+		t.Fatalf("expected highlighted stack match, got %q", row)
+	}
+}
+
+func TestRenderLogLineHighlightsMessageAndBadges(t *testing.T) {
+	t.Parallel()
+
+	line := renderLogLine(
+		time.Date(2026, 3, 29, 10, 0, 0, 0, time.UTC),
+		"api-debug",
+		domain.LogSourceStderr,
+		"dial tcp timeout",
+		"timeout",
+		120,
+	)
+	if !strings.Contains(line, filterMatchStyle.Render("timeout")) {
+		t.Fatalf("expected highlighted log message match, got %q", line)
+	}
+
+	badgeLine := renderLogLine(
+		time.Date(2026, 3, 29, 10, 0, 0, 0, time.UTC),
+		"api-debug",
+		domain.LogSourceStderr,
+		"dial tcp timeout",
+		"stderr",
+		120,
+	)
+	if !strings.Contains(badgeLine, logMatchBadgeStyle.Render("ERR")) {
+		t.Fatalf("expected highlighted source badge, got %q", badgeLine)
+	}
+
+	profileLine := renderLogLine(
+		time.Date(2026, 3, 29, 10, 0, 0, 0, time.UTC),
+		"api-debug",
+		domain.LogSourceStdout,
+		"ready",
+		"api",
+		120,
+	)
+	if !strings.Contains(profileLine, logMatchBadgeStyle.Render("api-debug")) {
+		t.Fatalf("expected highlighted profile badge, got %q", profileLine)
 	}
 }
 

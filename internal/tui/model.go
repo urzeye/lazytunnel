@@ -114,12 +114,21 @@ var (
 				Foreground(lipgloss.Color("110"))
 	filterPlaceholderStyle = lipgloss.NewStyle().
 				Foreground(lipgloss.Color("244"))
+	filterMatchStyle = lipgloss.NewStyle().
+				Bold(true).
+				Foreground(lipgloss.Color("232")).
+				Background(lipgloss.Color("220"))
 	logTimestampStyle = lipgloss.NewStyle().
 				Foreground(lipgloss.Color("244"))
 	logProfileBadgeStyle = lipgloss.NewStyle().
 				Bold(true).
 				Foreground(lipgloss.Color("230")).
 				Background(lipgloss.Color("237")).
+				Padding(0, 1)
+	logMatchBadgeStyle = lipgloss.NewStyle().
+				Bold(true).
+				Foreground(lipgloss.Color("232")).
+				Background(lipgloss.Color("220")).
 				Padding(0, 1)
 	logSystemMessageStyle = lipgloss.NewStyle().
 				Foreground(lipgloss.Color("248"))
@@ -713,9 +722,10 @@ func (m Model) renderProfileRow(view app.ProfileView, selected bool, focused boo
 	style := listRowStyleFor(selected, focused)
 	marker := selectionMarker(selected, focused)
 	contentWidth := max(1, width-style.GetHorizontalFrameSize()-lipgloss.Width(marker))
-	line := composeStyledLine(
+	line := composeHighlightedLine(
 		renderStatusBadge(m.language(), view.State.Status)+" ",
 		fmt.Sprintf("%s  %s  %s", view.Profile.Name, profileListPort(view.Profile), profileTarget(m.language(), view.Profile)),
+		m.filterQuery,
 		contentWidth,
 	)
 	return renderSizedBlock(style, width, marker+line)
@@ -725,9 +735,10 @@ func (m Model) renderStackRow(view app.StackView, selected bool, focused bool, w
 	style := listRowStyleFor(selected, focused)
 	marker := selectionMarker(selected, focused)
 	contentWidth := max(1, width-style.GetHorizontalFrameSize()-lipgloss.Width(marker))
-	line := composeStyledLine(
+	line := composeHighlightedLine(
 		renderStackStatusBadge(m.language(), view.Status)+" ",
 		fmt.Sprintf("%s  %d/%d  %s", view.Stack.Name, view.ActiveCount, len(view.Members), stackMembersSummary(m.language(), view)),
+		m.filterQuery,
 		contentWidth,
 	)
 	return renderSizedBlock(style, width, marker+line)
@@ -942,7 +953,7 @@ func (m Model) renderProfileLogLines(view app.ProfileView, width int) []string {
 	lines := make([]string, 0, len(filtered))
 	for idx := len(filtered) - 1; idx >= 0; idx-- {
 		entry := filtered[idx]
-		lines = append(lines, renderLogLine(entry.Timestamp, "", entry.Source, entry.Message, width))
+		lines = append(lines, renderLogLine(entry.Timestamp, "", entry.Source, entry.Message, m.logFilterQuery, width))
 	}
 
 	return lines
@@ -965,7 +976,7 @@ func (m Model) renderStackLogLines(view app.StackView, width int) []string {
 	lines := make([]string, 0, len(activity))
 	for idx := len(activity) - 1; idx >= 0; idx-- {
 		entry := activity[idx]
-		lines = append(lines, renderLogLine(entry.Log.Timestamp, entry.ProfileName, entry.Log.Source, entry.Log.Message, width))
+		lines = append(lines, renderLogLine(entry.Log.Timestamp, entry.ProfileName, entry.Log.Source, entry.Log.Message, m.logFilterQuery, width))
 	}
 
 	return lines
@@ -2326,6 +2337,22 @@ func composeStyledLine(prefix, content string, width int) string {
 	return prefix + truncateText(content, remaining)
 }
 
+func composeHighlightedLine(prefix, content, query string, width int) string {
+	if width <= 0 {
+		return prefix + renderHighlightedText(content, query, lipgloss.NewStyle(), filterMatchStyle)
+	}
+	if strings.TrimSpace(content) == "" {
+		return prefix
+	}
+
+	remaining := width - lipgloss.Width(prefix)
+	if remaining <= 0 {
+		return prefix
+	}
+
+	return prefix + renderHighlightedText(truncateText(content, remaining), query, lipgloss.NewStyle(), filterMatchStyle)
+}
+
 func clipLines(lines []string, offset, limit int) []string {
 	if len(lines) == 0 || limit <= 0 {
 		return nil
@@ -2441,17 +2468,27 @@ func renderKeyValueLine(label, value string, width int) string {
 	return prefix + sectionTextStyle.Render(truncateText(value, max(1, width-lipgloss.Width(prefix))))
 }
 
-func renderLogLine(timestamp time.Time, profileName string, source domain.LogSource, message string, width int) string {
+func renderLogLine(timestamp time.Time, profileName string, source domain.LogSource, message string, query string, width int) string {
 	prefixParts := []string{
-		logTimestampStyle.Render(timestamp.Format("15:04:05")),
-		renderLogSourceBadge(source),
+		renderHighlightedText(timestamp.Format("15:04:05"), query, logTimestampStyle, filterMatchStyle),
+		renderLogSourceBadge(source, query),
 	}
 	if profileName != "" {
-		prefixParts = append(prefixParts, renderLogProfileBadge(profileName))
+		prefixParts = append(prefixParts, renderLogProfileBadge(profileName, query))
 	}
 
 	prefix := strings.Join(prefixParts, " ")
-	return composeStyledLine(prefix+" ", renderLogMessage(source, message), width)
+	normalized := normalizeLogMessage(message)
+	if width <= 0 {
+		return prefix + " " + renderHighlightedText(normalized, query, logMessageStyle(source), filterMatchStyle)
+	}
+
+	remaining := width - lipgloss.Width(prefix) - 1
+	if remaining <= 0 {
+		return prefix
+	}
+
+	return prefix + " " + renderHighlightedText(truncateText(normalized, remaining), query, logMessageStyle(source), filterMatchStyle)
 }
 
 func renderSizedBlock(style lipgloss.Style, width int, body string) string {
@@ -2514,7 +2551,7 @@ func renderStateBadge(label string, background lipgloss.Color) string {
 		Render(label)
 }
 
-func renderLogSourceBadge(source domain.LogSource) string {
+func renderLogSourceBadge(source domain.LogSource, query string) string {
 	label := "SYS"
 	style := lipgloss.NewStyle().Bold(true).Foreground(lipgloss.Color("230")).Background(lipgloss.Color("238")).Padding(0, 1)
 
@@ -2527,16 +2564,20 @@ func renderLogSourceBadge(source domain.LogSource) string {
 		style = style.Background(lipgloss.Color("124"))
 	}
 
+	if logSourceMatchesQuery(source, query) {
+		style = logMatchBadgeStyle
+	}
+
 	return style.Render(label)
 }
 
-func renderLogProfileBadge(profileName string) string {
-	return logProfileBadgeStyle.Render(profileName)
-}
-
-func renderLogMessage(source domain.LogSource, message string) string {
-	normalized := normalizeLogMessage(message)
-	return logMessageStyle(source).Render(normalized)
+func renderLogProfileBadge(profileName, query string) string {
+	style := logProfileBadgeStyle
+	query = normalizeFilterQuery(query)
+	if query != "" && strings.Contains(strings.ToLower(profileName), query) {
+		style = logMatchBadgeStyle
+	}
+	return style.Render(profileName)
 }
 
 func logMessageStyle(source domain.LogSource) lipgloss.Style {
@@ -2732,6 +2773,7 @@ func stackSearchText(view app.StackView) string {
 		humanStackStatus(domain.LanguageEnglish, view.Status),
 	}
 	parts = append(parts, view.Stack.Labels...)
+	parts = append(parts, view.Stack.Profiles...)
 
 	for _, member := range view.Members {
 		parts = append(parts,
@@ -2772,6 +2814,80 @@ func logSearchText(profileName string, entry domain.LogEntry) string {
 
 func normalizeFilterQuery(query string) string {
 	return strings.ToLower(strings.TrimSpace(query))
+}
+
+type matchRange struct {
+	start int
+	end   int
+}
+
+func renderHighlightedText(value, query string, baseStyle, matchStyle lipgloss.Style) string {
+	matches := filterMatchRanges(value, query)
+	if len(matches) == 0 {
+		return baseStyle.Render(value)
+	}
+
+	runes := []rune(value)
+	var builder strings.Builder
+	last := 0
+	for _, match := range matches {
+		if match.start > last {
+			builder.WriteString(baseStyle.Render(string(runes[last:match.start])))
+		}
+		builder.WriteString(matchStyle.Render(string(runes[match.start:match.end])))
+		last = match.end
+	}
+	if last < len(runes) {
+		builder.WriteString(baseStyle.Render(string(runes[last:])))
+	}
+
+	return builder.String()
+}
+
+func filterMatchRanges(value, query string) []matchRange {
+	query = normalizeFilterQuery(query)
+	if query == "" {
+		return nil
+	}
+
+	valueRunes := []rune(value)
+	queryRunes := []rune(query)
+	if len(queryRunes) == 0 || len(queryRunes) > len(valueRunes) {
+		return nil
+	}
+
+	matches := make([]matchRange, 0, 2)
+	for start := 0; start <= len(valueRunes)-len(queryRunes); {
+		end := start + len(queryRunes)
+		if strings.EqualFold(string(valueRunes[start:end]), query) {
+			matches = append(matches, matchRange{start: start, end: end})
+			start = end
+			continue
+		}
+		start++
+	}
+
+	return matches
+}
+
+func logSourceMatchesQuery(source domain.LogSource, query string) bool {
+	query = normalizeFilterQuery(query)
+	if query == "" {
+		return false
+	}
+
+	return strings.Contains(strings.ToLower(strings.Join(logSourceSearchTerms(source), " ")), query)
+}
+
+func logSourceSearchTerms(source domain.LogSource) []string {
+	switch source {
+	case domain.LogSourceStdout:
+		return []string{"OUT", "out", "stdout"}
+	case domain.LogSourceStderr:
+		return []string{"ERR", "err", "stderr"}
+	default:
+		return []string{"SYS", "sys", "system"}
+	}
 }
 
 func formatVisibleCount(visible, total int) string {
