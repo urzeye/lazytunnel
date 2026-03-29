@@ -373,7 +373,7 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 				}
 			}
 			return m, nil
-		case "R":
+		case "r", "R":
 			m = m.restartSelection(profiles, stacks)
 			return m, nil
 		}
@@ -484,21 +484,28 @@ func (m Model) hintMessage() string {
 		}
 		return m.t("Filter mode: type to search names, labels, targets, and ports. Enter finishes. Esc clears or exits. Backspace/Ctrl+W deletes. Ctrl+U clears.", "筛选模式: 可搜索名称、标签、目标和端口。Enter 完成，Esc 清空或退出，Backspace/Ctrl+W 删除，Ctrl+U 清空。")
 	case m.workspaceIsEmpty():
-		return m.t("i init sample  a draft profile  e edit config  r reload  L language  / filter  q quit", "i 示例配置  a 配置草稿  e 编辑配置  r 重新加载  L 切换语言  / 筛选  q 退出")
+		return m.t("i init sample  a draft profile  e edit config  g reload  L language  ", "i 示例配置  a 配置草稿  e 编辑配置  g 重新加载  L 切换语言  ") + m.inlineFilterHint() + m.t("  q quit", "  q 退出")
 	}
 
 	profileCount := len(m.service.ProfileViews())
 	stackCount := len(m.service.StackViews())
 	switch {
 	case profileCount == 0:
-		return m.t("a draft profile  e edit config  r reload  L language  / filter  q quit", "a 配置草稿  e 编辑配置  r 重新加载  L 切换语言  / 筛选  q 退出")
+		return m.t("a draft profile  e edit config  g reload  L language  ", "a 配置草稿  e 编辑配置  g 重新加载  L 切换语言  ") + m.inlineFilterHint() + m.t("  q quit", "  q 退出")
 	case stackCount == 0:
-		return m.t("j/k move  h/l inspector  Enter toggle  R restart  c clone profile  A draft stack  e edit config  L language  / filter  q quit", "j/k 移动  h/l 检查器  Enter 切换  R 重启  c 克隆配置  A 组合草稿  e 编辑配置  L 切换语言  / 筛选  q 退出")
+		return m.t("j/k move  h/l inspector  Enter toggle  r restart  c clone  A stack draft  e edit  g reload  ", "j/k 移动  h/l 检查器  Enter 切换  r 重启  c 克隆  A 组合草稿  e 编辑  g 重新加载  ") + m.inlineFilterHint() + m.t("  q quit", "  q 退出")
 	case m.focus == focusStacks:
-		return m.t("j/k move  Tab lists  h/l inspector  Enter toggle stack  R restart stack  c clone stack  A draft stack  d delete  L language  / filter  q quit", "j/k 移动  Tab 列表  h/l 检查器  Enter 切换组合  R 重启组合  c 克隆组合  A 组合草稿  d 删除  L 切换语言  / 筛选  q 退出")
+		return m.t("j/k move  Tab lists  h/l inspector  Enter toggle  r restart  c clone  A stack draft  d delete  g reload  ", "j/k 移动  Tab 列表  h/l 检查器  Enter 切换  r 重启  c 克隆  A 组合草稿  d 删除  g 重新加载  ") + m.inlineFilterHint() + m.t("  q quit", "  q 退出")
 	default:
-		return m.t("j/k move  Tab lists  h/l inspector  Enter toggle  R restart  c clone profile  A draft stack  d delete  L language  / filter  q quit", "j/k 移动  Tab 列表  h/l 检查器  Enter 切换  R 重启  c 克隆配置  A 组合草稿  d 删除  L 切换语言  / 筛选  q 退出")
+		return m.t("j/k move  Tab lists  h/l inspector  Enter toggle  r restart  c clone  A stack draft  d delete  g reload  ", "j/k 移动  Tab 列表  h/l 检查器  Enter 切换  r 重启  c 克隆  A 组合草稿  d 删除  g 重新加载  ") + m.inlineFilterHint() + m.t("  q quit", "  q 退出")
 	}
+}
+
+func (m Model) inlineFilterHint() string {
+	if m.inspectorTab == inspectorTabLogs {
+		return m.t("/ filter logs", "/ 筛选日志")
+	}
+	return m.t("/ filter", "/ 筛选")
 }
 
 func (m Model) renderBody(profiles []app.ProfileView, stacks []app.StackView, width, height int) string {
@@ -654,6 +661,9 @@ func (m Model) renderInspectorTabs(width int) string {
 	tabs := []string{
 		renderInspectorTab("h", m.t("Details", "详情"), m.inspectorTab == inspectorTabDetails),
 		renderInspectorTab("l", m.t("Logs", "日志"), m.inspectorTab == inspectorTabLogs),
+	}
+	if m.inspectorTab == inspectorTabLogs || m.logFilterQuery != "" {
+		tabs = append(tabs, renderInspectorTab("/", m.t("filter", "筛选"), m.filterMode && m.activeFilterScope() == filterScopeLogs))
 	}
 	line := strings.Join(tabs, " ")
 	return lipgloss.NewStyle().Width(max(1, width)).Render(line)
@@ -968,7 +978,7 @@ func (m Model) handleFilterKey(msg tea.KeyMsg) (Model, bool) {
 
 func (m Model) handleWorkspaceKey(msg tea.KeyMsg, profiles []app.ProfileView, stacks []app.StackView) (Model, tea.Cmd, bool) {
 	switch msg.String() {
-	case "r":
+	case "g":
 		m = m.reloadConfigFromDisk(m.t("Reloaded config from disk.", "已从磁盘重新加载配置。"))
 		return m, nil, true
 	case "e":
@@ -1756,7 +1766,7 @@ func (m Model) renderEmptyProfilesLines(width int) []string {
 		{key: "i", label: m.t("sample config", "示例配置")},
 		{key: "a", label: m.t("draft profile", "配置草稿")},
 		{key: "e", label: m.t("edit config", "编辑配置")},
-		{key: "r", label: m.t("reload config", "重新加载配置")},
+		{key: "g", label: m.t("reload config", "重新加载配置")},
 		{key: "L", label: m.t("switch language", "切换语言")},
 	})
 	return append(rows, mutedStyle.Render(truncateText(m.t("No profiles yet. Start here.", "还没有配置。从这里开始。"), width)))
@@ -1766,7 +1776,7 @@ func (m Model) renderEmptyStacksLines(width int) []string {
 	rows := renderQuickActionRows(width, []quickAction{
 		{key: "A", label: m.t("draft stack", "组合草稿")},
 		{key: "e", label: m.t("edit config", "编辑配置")},
-		{key: "r", label: m.t("reload config", "重新加载配置")},
+		{key: "g", label: m.t("reload config", "重新加载配置")},
 		{key: "L", label: m.t("switch language", "切换语言")},
 		{key: "Tab", label: m.t("focus profiles", "切到配置")},
 	})
@@ -1781,7 +1791,7 @@ func (m Model) renderEmptyInspectorLines(width int) []string {
 		renderActionLine("i", m.t("seed sample SSH and Kubernetes tunnels", "写入示例 SSH 和 Kubernetes 隧道"), width),
 		renderActionLine("a", m.t("create a starter SSH profile draft", "创建一个 SSH 配置草稿"), width),
 		renderActionLine("e", m.t("open the YAML config in your editor", "在编辑器里打开 YAML 配置"), width),
-		renderActionLine("r", m.t("reload external config edits", "重新加载外部改动后的配置"), width),
+		renderActionLine("g", m.t("reload external config edits", "重新加载外部改动后的配置"), width),
 		renderActionLine("L", m.t("switch between English and Chinese", "在英文和中文之间切换"), width),
 		"",
 		renderCompactKeyValue(m.t("Config", "配置"), m.configPath, width),
@@ -1944,10 +1954,11 @@ func (m Model) profileActionLines(view app.ProfileView, width int) []string {
 
 	return []string{
 		renderActionLine("Enter", toggleLabel, width),
-		renderActionLine("R", m.t("restart tunnel", "重启隧道"), width),
+		renderActionLine("r", m.t("restart tunnel", "重启隧道"), width),
 		renderActionLine("c", m.t("clone profile draft", "克隆配置草稿"), width),
 		renderActionLine("A", m.t("create stack draft from profile", "从配置创建组合草稿"), width),
 		renderActionLine("e", m.t("edit config file", "编辑配置文件"), width),
+		renderActionLine("g", m.t("reload config from disk", "从磁盘重新加载配置"), width),
 		renderActionLine("d", m.t("delete profile", "删除配置"), width),
 	}
 }
@@ -1960,10 +1971,11 @@ func (m Model) stackActionLines(view app.StackView, width int) []string {
 
 	return []string{
 		renderActionLine("Enter", toggleLabel, width),
-		renderActionLine("R", m.t("restart stack", "重启组合"), width),
+		renderActionLine("r", m.t("restart stack", "重启组合"), width),
 		renderActionLine("c", m.t("clone stack draft", "克隆组合草稿"), width),
 		renderActionLine("A", m.t("create another stack draft", "再创建一个组合草稿"), width),
 		renderActionLine("e", m.t("edit config file", "编辑配置文件"), width),
+		renderActionLine("g", m.t("reload config from disk", "从磁盘重新加载配置"), width),
 		renderActionLine("d", m.t("delete stack", "删除组合"), width),
 	}
 }

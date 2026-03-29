@@ -209,7 +209,7 @@ func TestRenderQuickActionRowsUsesTwoColumnsWhenWide(t *testing.T) {
 		{key: "i", label: "sample config"},
 		{key: "a", label: "draft profile"},
 		{key: "e", label: "edit config"},
-		{key: "r", label: "reload config"},
+		{key: "g", label: "reload config"},
 	})
 
 	if len(rows) != 2 {
@@ -235,7 +235,7 @@ func TestRenderQuickActionRowsFallsBackToSingleColumnWhenNarrow(t *testing.T) {
 	rows := renderQuickActionRows(24, []quickAction{
 		{key: "A", label: "draft stack"},
 		{key: "e", label: "edit config"},
-		{key: "r", label: "reload config"},
+		{key: "g", label: "reload config"},
 		{key: "Tab", label: "focus profiles"},
 	})
 
@@ -352,8 +352,11 @@ func TestProfileActionLinesIncludeRestart(t *testing.T) {
 	lines := model.profileActionLines(app.ProfileView{}, 40)
 	rendered := strings.Join(lines, "\n")
 
-	if !strings.Contains(rendered, "R") || !strings.Contains(rendered, "restart tunnel") {
+	if !strings.Contains(rendered, "r") || !strings.Contains(rendered, "restart tunnel") {
 		t.Fatalf("expected restart action in profile actions, got %q", rendered)
+	}
+	if !strings.Contains(rendered, "g") || !strings.Contains(rendered, "reload config from disk") {
+		t.Fatalf("expected reload action in profile actions, got %q", rendered)
 	}
 }
 
@@ -368,6 +371,9 @@ func TestRenderInspectorTabsShowsKeyHints(t *testing.T) {
 	}
 	if !strings.Contains(got, "l Logs") {
 		t.Fatalf("expected logs tab hint, got %q", got)
+	}
+	if !strings.Contains(got, "/ filter") {
+		t.Fatalf("expected log filter tab hint, got %q", got)
 	}
 }
 
@@ -1081,13 +1087,47 @@ func TestHintMessageMentionsInspectorTabs(t *testing.T) {
 	if !strings.Contains(got, "h/l inspector") {
 		t.Fatalf("expected inspector tab hint, got %q", got)
 	}
-	if !strings.Contains(got, "R restart") {
+	if !strings.Contains(got, "r restart") {
 		t.Fatalf("expected restart hint, got %q", got)
+	}
+	if !strings.Contains(got, "g reload") {
+		t.Fatalf("expected reload hint, got %q", got)
+	}
+}
+
+func TestHintMessageMentionsLogFilteringWhenLogsTabActive(t *testing.T) {
+	t.Parallel()
+
+	service, err := app.NewService(storage.SampleConfig(), newStubRuntimeController())
+	if err != nil {
+		t.Fatalf("new service: %v", err)
+	}
+
+	model := Model{service: service, inspectorTab: inspectorTabLogs}
+	got := model.hintMessage()
+	if !strings.Contains(got, "/ filter logs") {
+		t.Fatalf("expected logs filter hint, got %q", got)
 	}
 }
 
 func TestRestartSelectionRestartsSelectedProfile(t *testing.T) {
 	t.Parallel()
+
+	cfg := domain.Config{
+		Version: domain.CurrentConfigVersion,
+		Profiles: []domain.Profile{
+			{
+				Name:      "prod-db",
+				Type:      domain.TunnelTypeSSHLocal,
+				LocalPort: 15432,
+				SSH: &domain.SSHLocal{
+					Host:       "bastion-prod",
+					RemoteHost: "db.internal",
+					RemotePort: 5432,
+				},
+			},
+		},
+	}
 
 	runtime := newStubRuntimeController()
 	runtime.states["prod-db"] = domain.RuntimeState{
@@ -1096,7 +1136,7 @@ func TestRestartSelectionRestartsSelectedProfile(t *testing.T) {
 		PID:         1,
 	}
 
-	service, err := app.NewService(storage.SampleConfig(), runtime)
+	service, err := app.NewService(cfg, runtime, app.WithPortChecker(stubPortChecker{}))
 	if err != nil {
 		t.Fatalf("new service: %v", err)
 	}
@@ -1118,6 +1158,72 @@ func TestRestartSelectionRestartsSelectedProfile(t *testing.T) {
 	state, ok := runtime.states["prod-db"]
 	if !ok || state.Status != domain.TunnelStatusRunning {
 		t.Fatalf("expected prod-db to be running after restart, got %#v", state)
+	}
+}
+
+func TestUpdateUsesLowercaseRForRestart(t *testing.T) {
+	t.Parallel()
+
+	cfg := domain.Config{
+		Version: domain.CurrentConfigVersion,
+		Profiles: []domain.Profile{
+			{
+				Name:      "prod-db",
+				Type:      domain.TunnelTypeSSHLocal,
+				LocalPort: 15432,
+				SSH: &domain.SSHLocal{
+					Host:       "bastion-prod",
+					RemoteHost: "db.internal",
+					RemotePort: 5432,
+				},
+			},
+		},
+	}
+
+	runtime := newStubRuntimeController()
+	runtime.states["prod-db"] = domain.RuntimeState{
+		ProfileName: "prod-db",
+		Status:      domain.TunnelStatusRunning,
+		PID:         1,
+	}
+
+	service, err := app.NewService(cfg, runtime, app.WithPortChecker(stubPortChecker{}))
+	if err != nil {
+		t.Fatalf("new service: %v", err)
+	}
+
+	model := Model{service: service}
+	nextModel, _ := model.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'r'}})
+	updated := nextModel.(Model)
+
+	if !strings.Contains(updated.lastNotice, "Restarted profile prod-db.") {
+		t.Fatalf("expected lowercase r to restart selected profile, got notice %q", updated.lastNotice)
+	}
+}
+
+func TestHandleWorkspaceKeyUsesGForReload(t *testing.T) {
+	t.Parallel()
+
+	configPath := filepath.Join(t.TempDir(), "config.yaml")
+	if err := storage.SaveConfig(configPath, storage.SampleConfig()); err != nil {
+		t.Fatalf("save config: %v", err)
+	}
+
+	service, err := app.NewService(domain.DefaultConfig(), newStubRuntimeController())
+	if err != nil {
+		t.Fatalf("new service: %v", err)
+	}
+
+	model := Model{service: service, configPath: configPath}
+	next, _, handled := model.handleWorkspaceKey(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'g'}}, nil, nil)
+	if !handled {
+		t.Fatal("expected g reload key to be handled")
+	}
+	if !strings.Contains(next.lastNotice, "Reloaded config from disk.") {
+		t.Fatalf("expected reload notice, got %q", next.lastNotice)
+	}
+	if got := len(next.service.ProfileViews()); got != 2 {
+		t.Fatalf("expected reload to refresh profiles from disk, got %d", got)
 	}
 }
 
@@ -1306,6 +1412,12 @@ func containsLabel(labels []string, want string) bool {
 		}
 	}
 	return false
+}
+
+type stubPortChecker struct{}
+
+func (stubPortChecker) CheckLocalPort(port int) error {
+	return nil
 }
 
 func findProfileByName(profiles []domain.Profile, name string) (domain.Profile, bool) {
