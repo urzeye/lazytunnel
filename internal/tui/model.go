@@ -13,6 +13,7 @@ import (
 
 	"github.com/urzeye/lazytunnel/internal/app"
 	"github.com/urzeye/lazytunnel/internal/domain"
+	profileimport "github.com/urzeye/lazytunnel/internal/profileimport"
 	ltruntime "github.com/urzeye/lazytunnel/internal/runtime"
 	"github.com/urzeye/lazytunnel/internal/storage"
 )
@@ -91,6 +92,11 @@ var (
 				Bold(true).
 				Foreground(lipgloss.Color("230")).
 				Background(lipgloss.Color("94")).
+				Padding(0, 1)
+	importPromptStyle = lipgloss.NewStyle().
+				Bold(true).
+				Foreground(lipgloss.Color("230")).
+				Background(lipgloss.Color("62")).
 				Padding(0, 1)
 	filterIdleStyle = lipgloss.NewStyle().
 			Foreground(lipgloss.Color("250")).
@@ -218,6 +224,7 @@ type Model struct {
 	filterMode      bool
 	filterScope     filterScope
 	pendingDelete   *deleteRequest
+	importMode      bool
 	inspectorTab    inspectorTab
 	inspectorScroll int
 	lastNotice      string
@@ -270,6 +277,14 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		if m.pendingDelete != nil {
 			var handled bool
 			m, handled = m.handleDeleteKey(msg, profiles, stacks)
+			if handled {
+				return m, nil
+			}
+		}
+
+		if m.importMode {
+			var handled bool
+			m, handled = m.handleImportKey(msg)
 			if handled {
 				return m, nil
 			}
@@ -466,6 +481,8 @@ func (m Model) renderStatusLine(width int) string {
 	switch {
 	case m.pendingDelete != nil:
 		return renderInlineBanner(deletePromptStyle, m.pendingDelete.Message, width)
+	case m.importMode:
+		return renderInlineBanner(importPromptStyle, m.t("Import drafts: s SSH config, k kube contexts, a both, Esc cancel.", "导入草稿: s SSH 配置，k Kubernetes context，a 全部导入，Esc 取消。"), width)
 	case m.lastError != "":
 		return renderInlineBanner(errorBannerStyle, m.t("Last error: ", "最近错误: ")+m.lastError, width)
 	case m.lastNotice != "":
@@ -487,6 +504,8 @@ func (m Model) hintMessage() string {
 	switch {
 	case m.pendingDelete != nil:
 		return m.t("Delete mode: y or Enter confirms. n or Esc cancels.", "删除模式: y 或 Enter 确认，n 或 Esc 取消。")
+	case m.importMode:
+		return m.t("Import mode: s imports ~/.ssh/config, k imports kube contexts, a imports both. Esc cancels.", "导入模式: s 导入 ~/.ssh/config，k 导入 Kubernetes context，a 两者都导入。Esc 取消。")
 	case m.filterMode:
 		if m.filterScope == filterScopeLogs {
 			return m.t("Log filter mode: type to search messages, sources, and profile names. Enter finishes. Esc clears or exits. Backspace/Ctrl+W deletes. Ctrl+U clears.", "日志筛选模式: 可搜索消息、来源和 profile 名。Enter 完成，Esc 清空或退出，Backspace/Ctrl+W 删除，Ctrl+U 清空。")
@@ -494,7 +513,8 @@ func (m Model) hintMessage() string {
 		return m.t("Filter mode: type to search names, labels, targets, and ports. Enter finishes. Esc clears or exits. Backspace/Ctrl+W deletes. Ctrl+U clears.", "筛选模式: 可搜索名称、标签、目标和端口。Enter 完成，Esc 清空或退出，Backspace/Ctrl+W 删除，Ctrl+U 清空。")
 	case m.workspaceIsEmpty():
 		return joinHintParts(
-			m.t("i sample config", "i 示例配置"),
+			m.t("i import drafts", "i 导入草稿"),
+			m.t("s sample config", "s 示例配置"),
 			m.t("a new tunnel draft", "a 新建隧道草稿"),
 			m.t("e edit config", "e 编辑配置"),
 			m.t("g reload config", "g 重新加载配置"),
@@ -509,6 +529,7 @@ func (m Model) hintMessage() string {
 	switch {
 	case profileCount == 0:
 		return joinHintParts(
+			m.t("i import drafts", "i 导入草稿"),
 			m.t("a new tunnel draft", "a 新建隧道草稿"),
 			m.t("e edit config", "e 编辑配置"),
 			m.t("g reload config", "g 重新加载配置"),
@@ -523,6 +544,7 @@ func (m Model) hintMessage() string {
 			m.inlineToggleHint(),
 			m.inlineRestartHint(),
 			m.t("c clone profile", "c 克隆配置"),
+			m.t("i import drafts", "i 导入草稿"),
 			m.t("A new stack draft", "A 新建组合草稿"),
 			m.t("e edit config", "e 编辑配置"),
 			m.t("g reload config", "g 重新加载配置"),
@@ -537,6 +559,7 @@ func (m Model) hintMessage() string {
 			m.inlineToggleHint(),
 			m.inlineRestartHint(),
 			m.t("c clone stack", "c 克隆组合"),
+			m.t("i import drafts", "i 导入草稿"),
 			m.t("A new stack draft", "A 新建组合草稿"),
 			m.t("d delete stack", "d 删除组合"),
 			m.t("g reload config", "g 重新加载配置"),
@@ -551,6 +574,7 @@ func (m Model) hintMessage() string {
 			m.inlineToggleHint(),
 			m.inlineRestartHint(),
 			m.t("c clone profile", "c 克隆配置"),
+			m.t("i import drafts", "i 导入草稿"),
 			m.t("A new stack draft", "A 新建组合草稿"),
 			m.t("d delete profile", "d 删除配置"),
 			m.t("g reload config", "g 重新加载配置"),
@@ -1089,6 +1113,18 @@ func (m Model) handleWorkspaceKey(msg tea.KeyMsg, profiles []app.ProfileView, st
 	case "g":
 		m = m.reloadConfigFromDisk(m.t("Reloaded config from disk.", "已从磁盘重新加载配置。"))
 		return m, nil, true
+	case "i", "I":
+		m.lastError = ""
+		m.lastNotice = ""
+		m.filterMode = false
+		m.importMode = true
+		return m, nil, true
+	case "s", "S":
+		if !m.workspaceIsEmpty() {
+			return m, nil, false
+		}
+		m = m.initializeSampleConfig()
+		return m, nil, true
 	case "e":
 		if err := m.ensureConfigFileExists(); err != nil {
 			m.lastError = err.Error()
@@ -1097,12 +1133,6 @@ func (m Model) handleWorkspaceKey(msg tea.KeyMsg, profiles []app.ProfileView, st
 		m.lastError = ""
 		m.lastNotice = ""
 		return m, openEditorCmd(m.configPath), true
-	case "i":
-		if !m.workspaceIsEmpty() {
-			return m, nil, false
-		}
-		m = m.initializeSampleConfig()
-		return m, nil, true
 	case "a":
 		m = m.createStarterProfileDraft()
 		return m, nil, true
@@ -1153,6 +1183,7 @@ func (m Model) createStarterProfileDraft() Model {
 	m.lastNotice = ""
 	m.filterQuery = ""
 	m.filterMode = false
+	m.importMode = false
 
 	cfg := m.service.Config()
 	profile := starterSSHProfileDraft(cfg, m.language())
@@ -1176,6 +1207,7 @@ func (m Model) createStarterProfileDraft() Model {
 func (m Model) createStarterStackDraft(profiles []app.ProfileView, stacks []app.StackView) Model {
 	m.lastError = ""
 	m.lastNotice = ""
+	m.importMode = false
 
 	cfg := m.service.Config()
 	stack, err := starterStackDraft(cfg, profiles, stacks, m.focus, m.selectedProfile, m.selectedStack, m.filterQuery, m.language())
@@ -1206,6 +1238,7 @@ func (m Model) createStarterStackDraft(profiles []app.ProfileView, stacks []app.
 func (m Model) toggleLanguage() Model {
 	m.lastError = ""
 	m.lastNotice = ""
+	m.importMode = false
 
 	cfg := m.service.Config()
 	next := nextLanguage(cfg.Language)
@@ -1224,6 +1257,7 @@ func (m Model) toggleLanguage() Model {
 func (m Model) cloneSelection(profiles []app.ProfileView, stacks []app.StackView) Model {
 	m.lastError = ""
 	m.lastNotice = ""
+	m.importMode = false
 
 	if m.focus == focusStacks && len(stacks) > 0 {
 		return m.cloneSelectedStack(stacks)
@@ -1242,6 +1276,7 @@ func (m Model) cloneSelection(profiles []app.ProfileView, stacks []app.StackView
 func (m Model) restartSelection(profiles []app.ProfileView, stacks []app.StackView) Model {
 	m.lastError = ""
 	m.lastNotice = ""
+	m.importMode = false
 
 	if m.focus == focusStacks && len(stacks) > 0 {
 		name := stacks[max(0, min(m.selectedStack, len(stacks)-1))].Stack.Name
@@ -1326,6 +1361,7 @@ func (m Model) cloneSelectedStack(stacks []app.StackView) Model {
 func (m Model) reloadConfigFromDisk(successNotice string) Model {
 	m.lastError = ""
 	m.lastNotice = ""
+	m.importMode = false
 
 	cfg, err := storage.LoadConfig(m.configPath)
 	if err != nil {
@@ -1449,6 +1485,26 @@ func (m Model) handleDeleteKey(msg tea.KeyMsg, profiles []app.ProfileView, stack
 	}
 }
 
+func (m Model) handleImportKey(msg tea.KeyMsg) (Model, bool) {
+	switch msg.String() {
+	case "esc":
+		m.importMode = false
+		m.lastNotice = m.t("Import cancelled.", "已取消导入。")
+		return m, true
+	case "s", "S":
+		m = m.importSSHDraftProfiles()
+		return m, true
+	case "k", "K":
+		m = m.importKubernetesDraftProfiles()
+		return m, true
+	case "a", "A":
+		m = m.importAllDraftProfiles()
+		return m, true
+	default:
+		return m, true
+	}
+}
+
 func (m Model) buildDeleteRequest(profiles []app.ProfileView, stacks []app.StackView) *deleteRequest {
 	if m.focus == focusStacks && len(stacks) > 0 {
 		view := stacks[m.selectedStack]
@@ -1510,6 +1566,7 @@ func (m Model) confirmDelete() Model {
 	m.pendingDelete = nil
 	m.lastError = ""
 	m.lastNotice = ""
+	m.importMode = false
 
 	if request == nil {
 		return m
@@ -1578,7 +1635,7 @@ func (m Model) showHint() bool {
 }
 
 func (m Model) hasStatusLine() bool {
-	return m.pendingDelete != nil || m.lastError != "" || m.lastNotice != ""
+	return m.pendingDelete != nil || m.importMode || m.lastError != "" || m.lastNotice != ""
 }
 
 func (m Model) chromeLineCount() int {
@@ -1871,7 +1928,8 @@ func (m Model) selectedValueStyle(profiles []app.ProfileView, stacks []app.Stack
 
 func (m Model) renderEmptyProfilesLines(width int) []string {
 	rows := renderQuickActionRows(width, []quickAction{
-		{key: "i", label: m.t("sample config", "示例配置")},
+		{key: "i", label: m.t("import drafts", "导入草稿")},
+		{key: "s", label: m.t("sample config", "示例配置")},
 		{key: "a", label: m.t("draft profile", "配置草稿")},
 		{key: "e", label: m.t("edit config", "编辑配置")},
 		{key: "g", label: m.t("reload config", "重新加载配置")},
@@ -1883,6 +1941,7 @@ func (m Model) renderEmptyProfilesLines(width int) []string {
 func (m Model) renderEmptyStacksLines(width int) []string {
 	rows := renderQuickActionRows(width, []quickAction{
 		{key: "A", label: m.t("draft stack", "组合草稿")},
+		{key: "i", label: m.t("import drafts", "导入草稿")},
 		{key: "e", label: m.t("edit config", "编辑配置")},
 		{key: "g", label: m.t("reload config", "重新加载配置")},
 		{key: "L", label: m.t("switch language", "切换语言")},
@@ -1896,7 +1955,8 @@ func (m Model) renderEmptyInspectorLines(width int) []string {
 		groupTitleStyle.Render(m.t("Quick Start", "快速开始")),
 		sectionTextStyle.Render(truncateText(m.t("The workspace is empty. Create tunnels or load an example config.", "当前工作区是空的。创建隧道，或加载一份示例配置。"), width)),
 		"",
-		renderActionLine("i", m.t("seed sample SSH and Kubernetes tunnels", "写入示例 SSH 和 Kubernetes 隧道"), width),
+		renderActionLine("i", m.t("import drafts from SSH and Kubernetes config", "从 SSH 和 Kubernetes 配置导入草稿"), width),
+		renderActionLine("s", m.t("seed sample SSH and Kubernetes tunnels", "写入示例 SSH 和 Kubernetes 隧道"), width),
 		renderActionLine("a", m.t("create a starter SSH profile draft", "创建一个 SSH 配置草稿"), width),
 		renderActionLine("e", m.t("open the YAML config in your editor", "在编辑器里打开 YAML 配置"), width),
 		renderActionLine("g", m.t("reload external config edits", "重新加载外部改动后的配置"), width),
@@ -1909,6 +1969,111 @@ func (m Model) renderEmptyInspectorLines(width int) []string {
 func renderActionLine(key, description string, width int) string {
 	prefix := codeStyle.Render(" " + key + " ")
 	return composeStyledLine(prefix+" ", description, width)
+}
+
+func (m Model) importSSHDraftProfiles() Model {
+	cfg, result, err := profileimport.ImportSSHConfig(m.service.Config(), "", false)
+	if err != nil {
+		m.importMode = false
+		m.lastError = m.t("Import SSH config: ", "导入 SSH 配置失败: ") + err.Error()
+		return m
+	}
+
+	return m.applyImportedConfig(
+		cfg,
+		result.ProfileNames,
+		result.Created,
+		result.Updated,
+		result.Skipped,
+		m.tf("Imported SSH drafts from %s: %d created, %d updated, %d skipped.", "已从 %s 导入 SSH 草稿: 新建 %d，更新 %d，跳过 %d。", result.SourcePath, result.Created, result.Updated, result.Skipped),
+	)
+}
+
+func (m Model) importKubernetesDraftProfiles() Model {
+	cfg, result, err := profileimport.ImportKubeContexts(m.service.Config(), "", false)
+	if err != nil {
+		m.importMode = false
+		m.lastError = m.t("Import kube contexts: ", "导入 Kubernetes context 失败: ") + err.Error()
+		return m
+	}
+
+	return m.applyImportedConfig(
+		cfg,
+		result.ProfileNames,
+		result.Created,
+		result.Updated,
+		result.Skipped,
+		m.tf("Imported kube drafts from %s: %d created, %d updated, %d skipped.", "已从 %s 导入 Kubernetes 草稿: 新建 %d，更新 %d，跳过 %d。", result.SourcePath, result.Created, result.Updated, result.Skipped),
+	)
+}
+
+func (m Model) importAllDraftProfiles() Model {
+	cfg := m.service.Config()
+	importedNames := make([]string, 0)
+	totalCreated := 0
+	totalUpdated := 0
+	totalSkipped := 0
+
+	cfg, sshResult, err := profileimport.ImportSSHConfig(cfg, "", false)
+	if err != nil {
+		m.importMode = false
+		m.lastError = m.t("Import drafts: ", "导入草稿失败: ") + err.Error()
+		return m
+	}
+	importedNames = append(importedNames, sshResult.ProfileNames...)
+	totalCreated += sshResult.Created
+	totalUpdated += sshResult.Updated
+	totalSkipped += sshResult.Skipped
+
+	cfg, kubeResult, err := profileimport.ImportKubeContexts(cfg, "", false)
+	if err != nil {
+		m.importMode = false
+		m.lastError = m.t("Import drafts: ", "导入草稿失败: ") + err.Error()
+		return m
+	}
+	importedNames = append(importedNames, kubeResult.ProfileNames...)
+	totalCreated += kubeResult.Created
+	totalUpdated += kubeResult.Updated
+	totalSkipped += kubeResult.Skipped
+
+	return m.applyImportedConfig(
+		cfg,
+		importedNames,
+		totalCreated,
+		totalUpdated,
+		totalSkipped,
+		m.tf("Imported drafts from SSH and kube config: %d created, %d updated, %d skipped.", "已从 SSH 和 Kubernetes 配置导入草稿: 新建 %d，更新 %d，跳过 %d。", totalCreated, totalUpdated, totalSkipped),
+	)
+}
+
+func (m Model) applyImportedConfig(cfg domain.Config, importedNames []string, created, updated, skipped int, successNotice string) Model {
+	m.lastError = ""
+	m.lastNotice = ""
+	m.importMode = false
+
+	if created == 0 && updated == 0 {
+		m.lastNotice = m.tf("Import finished: 0 created, 0 updated, %d skipped.", "导入完成: 新建 0，更新 0，跳过 %d。", skipped)
+		return m
+	}
+
+	if err := storage.SaveConfig(m.configPath, cfg); err != nil {
+		m.lastError = m.t("Save imported drafts: ", "保存导入草稿失败: ") + err.Error()
+		return m
+	}
+
+	m.service.ReplaceConfig(cfg)
+	m.focus = focusProfiles
+	m.selectedStack = 0
+	m.inspectorTab = inspectorTabDetails
+	m.inspectorScroll = 0
+	m.pendingDelete = nil
+	m.filterQuery = ""
+	m.filterMode = false
+	if len(importedNames) > 0 {
+		m.selectProfileByName(importedNames[0])
+	}
+	m.lastNotice = successNotice
+	return m
 }
 
 func renderActionChip(key, label string) string {

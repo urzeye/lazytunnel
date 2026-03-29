@@ -112,6 +112,30 @@ lazytunnel profile edit staging-db \
   --label db
 ```
 
+Import draft profiles from your existing SSH config:
+
+```bash
+lazytunnel profile import ssh-config
+```
+
+Import draft profiles from your kubeconfig contexts:
+
+```bash
+lazytunnel profile import kube-contexts
+```
+
+Use a custom config path or overwrite existing names when needed:
+
+```bash
+lazytunnel --config ~/.config/lazytunnel/config.yaml profile import ssh-config --overwrite
+lazytunnel profile import kube-contexts --kubeconfig ~/.kube/config --overwrite
+```
+
+Imported profiles are created as editable drafts. SSH imports use a placeholder
+forward target and Kubernetes imports use a placeholder resource target, so
+you'll usually want to refine them before connecting. If the TUI is already
+open, press `g` to reload the config after importing.
+
 Validate your config:
 
 ```bash
@@ -124,6 +148,11 @@ Launch the terminal UI:
 lazytunnel
 ```
 
+Inside the TUI:
+
+- press `i` to open the import prompt for `~/.ssh/config`, kube contexts, or both
+- press `s` to seed the sample config when the workspace is empty
+
 ## Key Features
 
 LazyTunnel is designed around a few strong workflows:
@@ -133,6 +162,7 @@ LazyTunnel is designed around a few strong workflows:
 - monitor status, uptime, ports, recent errors, and recent logs in one place
 - group multiple tunnels into a stack and start them together
 - filter profiles and stacks by name, label, target, and port
+- import draft profiles from `~/.ssh/config` and kubeconfig contexts from the CLI or TUI
 - detect local port conflicts before startup
 - manage config from the CLI with add, clone, edit, and remove commands
 - delete profiles and stacks directly from the TUI with confirmation
@@ -153,7 +183,6 @@ LazyTunnel is designed around a few strong workflows:
 - richer runtime status, reconnect insight, and log surfaces in the TUI
 - log formatting, visual polish, and filtering inside the logs inspector
 - better project stacks with labels and preflight validation
-- guided import flows from `~/.ssh/config` and Kubernetes contexts
 - an explicit manual restart action in the TUI if start/stop still feels insufficient
 
 ## Non-Goals

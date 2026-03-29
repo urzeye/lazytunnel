@@ -119,6 +119,29 @@ lazytunnel profile edit staging-db \
   --label db
 ```
 
+从现有 `~/.ssh/config` 导入 draft profile：
+
+```bash
+lazytunnel profile import ssh-config
+```
+
+从 kubeconfig context 导入 draft profile：
+
+```bash
+lazytunnel profile import kube-contexts
+```
+
+如果你要指定配置文件路径，或允许覆盖同名 profile：
+
+```bash
+lazytunnel --config ~/.config/lazytunnel/config.yaml profile import ssh-config --overwrite
+lazytunnel profile import kube-contexts --kubeconfig ~/.kube/config --overwrite
+```
+
+导入后的 profile 会以可编辑草稿的形式写入配置。SSH 导入会先放一个占位转发目标，
+Kubernetes 导入会先放一个占位资源目标，所以通常还需要再改一遍配置再连接。
+如果你已经打开了 TUI，导入完成后按 `g` 重新加载配置即可看到新条目。
+
 校验当前配置：
 
 ```bash
@@ -131,6 +154,11 @@ lazytunnel validate
 lazytunnel
 ```
 
+在 TUI 里：
+
+- 按 `i` 打开导入提示，可从 `~/.ssh/config`、Kubernetes context，或两者一起导入
+- 当工作区为空时，按 `s` 写入示例配置
+
 ## 核心能力
 
 LazyTunnel 围绕几个高频场景来设计：
@@ -140,6 +168,7 @@ LazyTunnel 围绕几个高频场景来设计：
 - 在一个界面里查看状态、运行时长、端口、最近错误和最近日志
 - 把多条 tunnel 组合成一个 stack，按项目批量启动
 - 按名称、标签、目标和端口快速过滤 profile / stack
+- 通过 CLI 或 TUI 从 `~/.ssh/config` 和 kubeconfig context 导入 draft profile
 - 在启动前识别本地端口冲突
 - 通过 CLI 完成 profile / stack 的新增、复制、修改和删除管理
 - 直接在 TUI 里带确认地删除 profile / stack
@@ -160,7 +189,6 @@ LazyTunnel 围绕几个高频场景来设计：
 - 在 TUI 里补齐更完整的运行状态、重连信息和日志视图
 - 优化日志面板的格式、样式和过滤体验
 - 继续增强按项目组织 stack、标签和预检查能力
-- 增加从 `~/.ssh/config` 和 Kubernetes context 的导入流程
 - 如果开始/停止还不够顺手，再补显式手动 restart 动作
 
 ## 明确不做什么

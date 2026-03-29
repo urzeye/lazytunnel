@@ -31,7 +31,6 @@ The first usable version should focus on a small but high-value slice:
 - Homebrew support
 - `aqua` / registry integration
 - log formatting, styling, and filtering polish in the TUI
-- imports from `~/.ssh/config` and Kubernetes contexts
 - an explicit manual restart action in the TUI if it still feels necessary
 
 ### v0.2
@@ -49,5 +48,4 @@ The first usable version should focus on a small but high-value slice:
 ## Current Focus
 
 - improve the logs inspector with better formatting, styling, and filtering
-- add imports from `~/.ssh/config` and Kubernetes contexts
 - keep `ssh -R` and `ssh -D` as a later phase after the current core workflows feel solid

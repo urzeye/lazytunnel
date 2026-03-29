@@ -1,6 +1,7 @@
 package tui
 
 import (
+	"os"
 	"path/filepath"
 	"strings"
 	"testing"
@@ -206,8 +207,8 @@ func TestRenderQuickActionRowsUsesTwoColumnsWhenWide(t *testing.T) {
 	t.Parallel()
 
 	rows := renderQuickActionRows(48, []quickAction{
-		{key: "i", label: "sample config"},
-		{key: "a", label: "draft profile"},
+		{key: "i", label: "import drafts"},
+		{key: "s", label: "sample config"},
 		{key: "e", label: "edit config"},
 		{key: "g", label: "reload config"},
 	})
@@ -222,7 +223,7 @@ func TestRenderQuickActionRowsUsesTwoColumnsWhenWide(t *testing.T) {
 	}
 
 	rendered := strings.Join(rows, "\n")
-	for _, snippet := range []string{"sample config", "draft profile", "edit config", "reload config"} {
+	for _, snippet := range []string{"import drafts", "sample config", "edit config", "reload config"} {
 		if !strings.Contains(rendered, snippet) {
 			t.Fatalf("expected %q in quick action rows, got %q", snippet, rendered)
 		}
@@ -263,7 +264,7 @@ func TestRenderEmptyProfilesLinesIncludesAllActions(t *testing.T) {
 	lines := model.renderEmptyProfilesLines(48)
 	rendered := strings.Join(lines, "\n")
 
-	for _, snippet := range []string{"sample config", "draft profile", "edit config", "reload config"} {
+	for _, snippet := range []string{"import drafts", "sample config", "draft profile", "edit config", "reload config"} {
 		if !strings.Contains(rendered, snippet) {
 			t.Fatalf("expected %q in empty profiles lines, got %q", snippet, rendered)
 		}
@@ -1197,6 +1198,9 @@ func TestHintMessageMentionsInspectorTabs(t *testing.T) {
 	if !strings.Contains(got, "h/l details/logs") {
 		t.Fatalf("expected inspector tab hint, got %q", got)
 	}
+	if !strings.Contains(got, "i import drafts") {
+		t.Fatalf("expected import hint, got %q", got)
+	}
 	if !strings.Contains(got, "Enter start tunnel") {
 		t.Fatalf("expected explicit Enter action, got %q", got)
 	}
@@ -1220,6 +1224,23 @@ func TestHintMessageMentionsLogFilteringWhenLogsTabActive(t *testing.T) {
 	got := model.hintMessage()
 	if !strings.Contains(got, "/ filter logs") {
 		t.Fatalf("expected logs filter hint, got %q", got)
+	}
+}
+
+func TestHintMessageMentionsImportAndSampleWhenWorkspaceEmpty(t *testing.T) {
+	t.Parallel()
+
+	service, err := app.NewService(domain.DefaultConfig(), newStubRuntimeController())
+	if err != nil {
+		t.Fatalf("new service: %v", err)
+	}
+
+	model := Model{service: service}
+	got := model.hintMessage()
+	for _, snippet := range []string{"i import drafts", "s sample config", "a new tunnel draft"} {
+		if !strings.Contains(got, snippet) {
+			t.Fatalf("expected %q in empty-workspace hint, got %q", snippet, got)
+		}
 	}
 }
 
@@ -1337,6 +1358,83 @@ func TestHandleWorkspaceKeyUsesGForReload(t *testing.T) {
 	}
 	if got := len(next.service.ProfileViews()); got != 2 {
 		t.Fatalf("expected reload to refresh profiles from disk, got %d", got)
+	}
+}
+
+func TestHandleWorkspaceKeyUsesIForImportMode(t *testing.T) {
+	t.Parallel()
+
+	service, err := app.NewService(domain.DefaultConfig(), newStubRuntimeController())
+	if err != nil {
+		t.Fatalf("new service: %v", err)
+	}
+
+	model := Model{service: service}
+	next, _, handled := model.handleWorkspaceKey(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'i'}}, nil, nil)
+	if !handled {
+		t.Fatal("expected i import key to be handled")
+	}
+	if !next.importMode {
+		t.Fatal("expected import mode to be enabled")
+	}
+}
+
+func TestHandleWorkspaceKeyUsesSForSampleConfigWhenEmpty(t *testing.T) {
+	t.Parallel()
+
+	configPath := filepath.Join(t.TempDir(), "config.yaml")
+	service, err := app.NewService(domain.DefaultConfig(), newStubRuntimeController())
+	if err != nil {
+		t.Fatalf("new service: %v", err)
+	}
+
+	model := Model{service: service, configPath: configPath}
+	next, _, handled := model.handleWorkspaceKey(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'s'}}, nil, nil)
+	if !handled {
+		t.Fatal("expected s sample key to be handled")
+	}
+	if !strings.Contains(next.lastNotice, "Initialized sample config") {
+		t.Fatalf("expected sample-config notice, got %q", next.lastNotice)
+	}
+	if got := len(next.service.ProfileViews()); got != 2 {
+		t.Fatalf("expected sample config to create 2 profiles, got %d", got)
+	}
+}
+
+func TestHandleImportKeyImportsSSHDrafts(t *testing.T) {
+	homeDir := t.TempDir()
+	sshDir := filepath.Join(homeDir, ".ssh")
+	if err := os.MkdirAll(sshDir, 0o755); err != nil {
+		t.Fatalf("mkdir ssh dir: %v", err)
+	}
+	sshConfigPath := filepath.Join(sshDir, "config")
+	if err := os.WriteFile(sshConfigPath, []byte("Host bastion-prod\n  HostName bastion.internal\n  User deploy\n  Port 2222\n"), 0o644); err != nil {
+		t.Fatalf("write ssh config: %v", err)
+	}
+	t.Setenv("HOME", homeDir)
+
+	configPath := filepath.Join(t.TempDir(), "config.yaml")
+	service, err := app.NewService(domain.DefaultConfig(), newStubRuntimeController())
+	if err != nil {
+		t.Fatalf("new service: %v", err)
+	}
+
+	model := Model{service: service, configPath: configPath, importMode: true}
+	next, handled := model.handleImportKey(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'s'}})
+	if !handled {
+		t.Fatal("expected s SSH import key to be handled")
+	}
+	if next.importMode {
+		t.Fatal("expected import mode to exit after SSH import")
+	}
+	if !strings.Contains(next.lastNotice, "Imported SSH drafts") {
+		t.Fatalf("expected SSH import notice, got %q", next.lastNotice)
+	}
+	if got := len(next.service.ProfileViews()); got != 1 {
+		t.Fatalf("expected 1 imported profile, got %d", got)
+	}
+	if got := next.service.ProfileViews()[0].Profile.Name; got != "bastion-prod" {
+		t.Fatalf("expected imported profile bastion-prod, got %q", got)
 	}
 }
 
