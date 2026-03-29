@@ -239,12 +239,18 @@ type mouseImportActionRegion struct {
 	action string
 }
 
+type mouseStackMemberRegion struct {
+	rect        mouseRect
+	profileName string
+}
+
 type mouseLayout struct {
 	headerFilter  mouseRect
 	profiles      mouseListRegion
 	stacks        mouseListRegion
 	inspector     mouseRect
 	inspectorTabs []mouseInspectorTabRegion
+	stackMembers  []mouseStackMemberRegion
 	importActions []mouseImportActionRegion
 }
 
@@ -594,6 +600,7 @@ func (m Model) hintMessage() string {
 			m.t("h/l details/logs", "h/l 详情/日志"),
 			m.inlineToggleHint(),
 			m.inlineRestartHint(),
+			m.inlineLogNavigationHint(),
 			m.t("c clone profile", "c 克隆配置"),
 			m.t("i import drafts", "i 导入草稿"),
 			m.t("A new stack draft", "A 新建组合草稿"),
@@ -609,6 +616,8 @@ func (m Model) hintMessage() string {
 			m.t("h/l details/logs", "h/l 详情/日志"),
 			m.inlineToggleHint(),
 			m.inlineRestartHint(),
+			m.t("p open member", "p 打开成员"),
+			m.inlineLogNavigationHint(),
 			m.t("c clone stack", "c 克隆组合"),
 			m.t("i import drafts", "i 导入草稿"),
 			m.t("A new stack draft", "A 新建组合草稿"),
@@ -624,6 +633,7 @@ func (m Model) hintMessage() string {
 			m.t("h/l details/logs", "h/l 详情/日志"),
 			m.inlineToggleHint(),
 			m.inlineRestartHint(),
+			m.inlineLogNavigationHint(),
 			m.t("c clone profile", "c 克隆配置"),
 			m.t("i import drafts", "i 导入草稿"),
 			m.t("A new stack draft", "A 新建组合草稿"),
@@ -684,6 +694,13 @@ func (m Model) inlineFilterHint() string {
 		return m.t("/ filter logs", "/ 筛选日志")
 	}
 	return m.t("/ filter", "/ 筛选")
+}
+
+func (m Model) inlineLogNavigationHint() string {
+	if m.inspectorTab != inspectorTabLogs {
+		return ""
+	}
+	return m.t("Home latest End oldest", "Home 最新 End 最旧")
 }
 
 func (m Model) currentHintViews() (Model, []app.ProfileView, []app.StackView) {
@@ -868,11 +885,16 @@ func (m Model) renderInspectorScrollLine(scroll, pageSize, total, width int) str
 		end = total
 	}
 
-	return renderInlineText(
-		mutedStyle,
-		m.tf("Lines %d-%d/%d", "行 %d-%d/%d", start, end, total),
-		width,
-	)
+	text := m.tf("Lines %d-%d/%d", "行 %d-%d/%d", start, end, total)
+	if m.inspectorTab == inspectorTabLogs {
+		mode := m.t("latest visible", "正在看最新")
+		if scroll > 0 {
+			mode = m.t("reviewing older logs", "正在看较旧日志")
+		}
+		text = text + " • " + mode + " • " + m.t("Home latest • End oldest", "Home 最新 • End 最旧")
+	}
+
+	return renderInlineText(mutedStyle, text, width)
 }
 
 func (m Model) currentInspectorLines(profiles []app.ProfileView, stacks []app.StackView, width int) []string {
@@ -964,6 +986,11 @@ func (m Model) renderProfileDetailLines(view app.ProfileView, width int) []strin
 }
 
 func (m Model) renderStackDetailLines(view app.StackView, width int) []string {
+	lines, _ := m.renderStackDetailContent(view, width)
+	return lines
+}
+
+func (m Model) renderStackDetailContent(view app.StackView, width int) ([]string, map[int]string) {
 	language := m.language()
 	lines := []string{
 		composeStyledLine(
@@ -977,11 +1004,13 @@ func (m Model) renderStackDetailLines(view app.StackView, width int) []string {
 		renderCompactKeyValue(m.t("Coverage", "覆盖率"), m.tf("%d/%d running", "%d/%d 运行中", view.ActiveCount, len(view.Members)), width),
 		groupTitleStyle.Render(m.t("Members", "成员")),
 	}
+	memberLineProfiles := make(map[int]string, len(view.Members))
 
 	if len(view.Members) == 0 {
 		lines = append(lines, mutedStyle.Render(truncateText(m.t("No member profiles resolved from config.", "配置里没有解析出任何成员配置。"), width)))
 	} else {
 		for _, member := range view.Members {
+			memberLineProfiles[len(lines)] = member.Profile.Name
 			lines = append(lines, composeStyledLine(
 				renderStatusBadge(language, member.State.Status)+" ",
 				fmt.Sprintf("%s  %s  %s", member.Profile.Name, profileListPort(member.Profile), profileTarget(language, member.Profile)),
@@ -1017,7 +1046,7 @@ func (m Model) renderStackDetailLines(view app.StackView, width int) []string {
 	lines = append(lines, groupTitleStyle.Render(m.t("Actions", "操作")))
 	lines = append(lines, m.stackActionLines(view, width)...)
 
-	return lines
+	return lines, memberLineProfiles
 }
 
 func (m Model) renderProfileLogLines(view app.ProfileView, width int) []string {
@@ -1248,6 +1277,12 @@ func (m Model) handleWorkspaceKey(msg tea.KeyMsg, profiles []app.ProfileView, st
 	case "A":
 		m = m.createStarterStackDraft(profiles, stacks)
 		return m, nil, true
+	case "p":
+		if m.focus != focusStacks || len(stacks) == 0 {
+			return m, nil, false
+		}
+		m = m.focusSelectedStackMember(stacks)
+		return m, nil, true
 	default:
 		return m, nil, false
 	}
@@ -1336,6 +1371,31 @@ func (m Model) createStarterStackDraft(profiles []app.ProfileView, stacks []app.
 	m.selectStackByName(stack.Name)
 	m.lastNotice = m.tf("Created starter stack %s. Press e to refine the config.", "已创建组合草稿 %s。按 e 继续完善配置。", stack.Name)
 	return m
+}
+
+func (m Model) focusSelectedStackMember(stacks []app.StackView) Model {
+	m.lastError = ""
+	m.lastNotice = ""
+
+	if m.focus != focusStacks || len(stacks) == 0 {
+		return m
+	}
+
+	selected := stacks[max(0, min(m.selectedStack, len(stacks)-1))]
+	if len(selected.Members) == 0 {
+		m.lastError = m.t("Selected stack has no resolved member profiles to open yet.", "当前组合还没有可打开的已解析成员配置。")
+		return m
+	}
+
+	profileName := selected.Members[0].Profile.Name
+	notice := m.tf("Opened member profile %s from stack %s.", "已从组合 %s 打开成员配置 %s。", profileName, selected.Stack.Name)
+	if m.language() == domain.LanguageSimplifiedChinese {
+		notice = fmt.Sprintf("已从组合 %s 打开成员配置 %s。", selected.Stack.Name, profileName)
+	}
+	return m.focusProfileByName(
+		profileName,
+		notice,
+	)
 }
 
 func (m Model) toggleLanguage() Model {
@@ -1503,6 +1563,20 @@ func (m *Model) selectStackByName(name string) {
 	m.selectedStack = 0
 }
 
+func (m Model) focusProfileByName(name string, notice string) Model {
+	m.focus = focusProfiles
+	m.inspectorScroll = 0
+	if m.filterQuery != "" {
+		m.filterQuery = ""
+		m.filterMode = false
+	}
+	m.selectProfileByName(name)
+	if notice != "" {
+		m.lastNotice = notice
+	}
+	return m
+}
+
 func (m Model) ensureConfigFileExists() error {
 	if _, err := os.Stat(m.configPath); err == nil {
 		return nil
@@ -1568,6 +1642,14 @@ func (m Model) handleInspectorKey(msg tea.KeyMsg, profiles []app.ProfileView, st
 		pageSize := m.inspectorPageSize()
 		maxScroll := max(0, len(m.currentInspectorLines(profiles, stacks, panelInnerWidth(m.contentWidth())))-pageSize)
 		m.inspectorScroll = min(maxScroll, m.inspectorScroll+pageSize)
+		return m, true
+	case "home":
+		m.inspectorScroll = 0
+		return m, true
+	case "end":
+		pageSize := m.inspectorPageSize()
+		maxScroll := max(0, len(m.currentInspectorLines(profiles, stacks, panelInnerWidth(m.contentWidth())))-pageSize)
+		m.inspectorScroll = maxScroll
 		return m, true
 	default:
 		return m, false
@@ -1648,6 +1730,15 @@ func (m Model) handleMouse(msg tea.MouseMsg, profiles []app.ProfileView, stacks 
 			m.inspectorTab = tab.tab
 			m.inspectorScroll = 0
 		}
+		return m, true
+	}
+
+	for _, region := range layout.stackMembers {
+		if !region.rect.contains(msg.X, msg.Y) {
+			continue
+		}
+
+		m = m.focusProfileByName(region.profileName, "")
 		return m, true
 	}
 
@@ -2111,6 +2202,7 @@ func (m Model) mouseLayout(profiles []app.ProfileView, stacks []app.StackView) m
 		layout.stacks = buildMouseListRegion(contentX, bodyY+profilesHeight+1, leftWidth, stacksHeight, len(stacks), m.selectedStack, focusStacks, true)
 		layout.inspector = mouseRect{x: contentX + leftWidth + 1, y: bodyY, width: rightWidth, height: bodyHeight}
 		layout.inspectorTabs = m.inspectorTabRegions(layout.inspector)
+		layout.stackMembers = m.stackMemberRegions(stacks, layout.inspector)
 		return layout
 	}
 
@@ -2122,6 +2214,7 @@ func (m Model) mouseLayout(profiles []app.ProfileView, stacks []app.StackView) m
 	}
 	layout.inspector = mouseRect{x: contentX, y: bodyY + listHeight + 1, width: width, height: inspectorHeight}
 	layout.inspectorTabs = m.inspectorTabRegions(layout.inspector)
+	layout.stackMembers = m.stackMemberRegions(stacks, layout.inspector)
 	return layout
 }
 
@@ -2196,6 +2289,41 @@ func (m Model) inspectorTabRegions(panel mouseRect) []mouseInspectorTabRegion {
 			scope: def.scope,
 		})
 		x += width + 1
+	}
+
+	return regions
+}
+
+func (m Model) stackMemberRegions(stacks []app.StackView, panel mouseRect) []mouseStackMemberRegion {
+	if m.focus != focusStacks || m.inspectorTab != inspectorTabDetails || len(stacks) == 0 {
+		return nil
+	}
+
+	selected := stacks[max(0, min(m.selectedStack, len(stacks)-1))]
+	innerWidth, pageSize := m.inspectorDimensions(panel.width, panel.height)
+	lines, memberLineProfiles := m.renderStackDetailContent(selected, innerWidth)
+	if len(memberLineProfiles) == 0 {
+		return nil
+	}
+
+	scroll := m.normalizedInspectorScroll(len(lines), pageSize)
+	pageStartY := panelBodyStartY(panel) + 1
+	regions := make([]mouseStackMemberRegion, 0, len(memberLineProfiles))
+	for row := 0; row < pageSize && scroll+row < len(lines); row++ {
+		profileName, exists := memberLineProfiles[scroll+row]
+		if !exists {
+			continue
+		}
+
+		regions = append(regions, mouseStackMemberRegion{
+			rect: mouseRect{
+				x:      panelContentX(panel),
+				y:      pageStartY + row,
+				width:  innerWidth,
+				height: 1,
+			},
+			profileName: profileName,
+		})
 	}
 
 	return regions
@@ -2620,6 +2748,7 @@ func (m Model) stackActionLines(view app.StackView, width int) []string {
 	return []string{
 		renderActionLine("Enter", toggleLabel, width),
 		renderActionLine("r", m.t("restart stack", "重启组合"), width),
+		renderActionLine("p", m.t("open first member profile", "打开第一个成员配置"), width),
 		renderActionLine("c", m.t("clone stack draft", "克隆组合草稿"), width),
 		renderActionLine("A", m.t("create another stack draft", "再创建一个组合草稿"), width),
 		renderActionLine("e", m.t("edit config file", "编辑配置文件"), width),

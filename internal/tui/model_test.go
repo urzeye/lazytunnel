@@ -863,6 +863,74 @@ func TestHandleFilterKeyUpdatesLogFilterIndependently(t *testing.T) {
 	}
 }
 
+func TestHandleInspectorKeyHomeAndEndNavigateLogs(t *testing.T) {
+	t.Parallel()
+
+	logs := make([]domain.LogEntry, 0, 40)
+	base := time.Date(2026, 3, 30, 10, 0, 0, 0, time.UTC)
+	for i := 0; i < 40; i++ {
+		logs = append(logs, domain.LogEntry{
+			Timestamp: base.Add(time.Duration(i) * time.Second),
+			Source:    domain.LogSourceStdout,
+			Message:   fmt.Sprintf("log line %02d", i),
+		})
+	}
+
+	runtime := newStubRuntimeController()
+	runtime.states["prod-db"] = domain.RuntimeState{
+		ProfileName: "prod-db",
+		Status:      domain.TunnelStatusRunning,
+		RecentLogs:  logs,
+	}
+
+	cfg := domain.Config{
+		Version: domain.CurrentConfigVersion,
+		Profiles: []domain.Profile{
+			{
+				Name:      "prod-db",
+				Type:      domain.TunnelTypeSSHLocal,
+				LocalPort: 15432,
+				SSH: &domain.SSHLocal{
+					Host:       "bastion-prod",
+					RemoteHost: "db.internal",
+					RemotePort: 5432,
+				},
+			},
+		},
+	}
+
+	service, err := app.NewService(cfg, runtime)
+	if err != nil {
+		t.Fatalf("new service: %v", err)
+	}
+
+	model := Model{
+		service:         service,
+		width:           140,
+		height:          30,
+		inspectorTab:    inspectorTabLogs,
+		inspectorScroll: 5,
+	}
+	profiles := filterProfileViews(service.ProfileViews(), "")
+	stacks := filterStackViews(service.StackViews(), "")
+
+	next, handled := model.handleInspectorKey(tea.KeyMsg{Type: tea.KeyHome}, profiles, stacks)
+	if !handled {
+		t.Fatal("expected home key to be handled")
+	}
+	if next.inspectorScroll != 0 {
+		t.Fatalf("expected home to jump to latest logs, got scroll=%d", next.inspectorScroll)
+	}
+
+	next, handled = next.handleInspectorKey(tea.KeyMsg{Type: tea.KeyEnd}, profiles, stacks)
+	if !handled {
+		t.Fatal("expected end key to be handled")
+	}
+	if next.inspectorScroll <= 0 {
+		t.Fatalf("expected end to jump away from latest logs, got scroll=%d", next.inspectorScroll)
+	}
+}
+
 func TestTrimLastWord(t *testing.T) {
 	t.Parallel()
 
@@ -1366,6 +1434,9 @@ func TestHintMessageMentionsLogFilteringWhenLogsTabActive(t *testing.T) {
 	if !strings.Contains(got, "/ filter logs") {
 		t.Fatalf("expected logs filter hint, got %q", got)
 	}
+	if !strings.Contains(got, "Home latest End oldest") {
+		t.Fatalf("expected log navigation hint, got %q", got)
+	}
 }
 
 func TestHintMessageMentionsImportAndSampleWhenWorkspaceEmpty(t *testing.T) {
@@ -1539,6 +1610,43 @@ func TestHandleWorkspaceKeyUsesSForSampleConfigWhenEmpty(t *testing.T) {
 	}
 	if got := len(next.service.ProfileViews()); got != 2 {
 		t.Fatalf("expected sample config to create 2 profiles, got %d", got)
+	}
+}
+
+func TestHandleWorkspaceKeyUsesPToOpenSelectedStackMember(t *testing.T) {
+	t.Parallel()
+
+	service, err := app.NewService(storage.SampleConfig(), newStubRuntimeController())
+	if err != nil {
+		t.Fatalf("new service: %v", err)
+	}
+
+	model := Model{
+		service:         service,
+		focus:           focusStacks,
+		selectedProfile: 1,
+		selectedStack:   0,
+		filterQuery:     "backend",
+		filterMode:      true,
+	}
+
+	profiles := filterProfileViews(service.ProfileViews(), "")
+	stacks := filterStackViews(service.StackViews(), "")
+	next, _, handled := model.handleWorkspaceKey(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'p'}}, profiles, stacks)
+	if !handled {
+		t.Fatal("expected p key to be handled for stacks")
+	}
+	if next.focus != focusProfiles {
+		t.Fatalf("expected focus to switch to profiles, got %v", next.focus)
+	}
+	if next.filterQuery != "" || next.filterMode {
+		t.Fatalf("expected filter to clear when opening member, got query=%q mode=%v", next.filterQuery, next.filterMode)
+	}
+	if got := next.service.ProfileViews()[next.selectedProfile].Profile.Name; got != "prod-db" {
+		t.Fatalf("expected first stack member prod-db to be focused, got %q", got)
+	}
+	if !strings.Contains(next.lastNotice, "Opened member profile prod-db from stack backend-dev.") {
+		t.Fatalf("expected open-member notice, got %q", next.lastNotice)
 	}
 }
 
@@ -1793,6 +1901,48 @@ func TestHandleMouseClickTriggersImportPromptAction(t *testing.T) {
 	}
 	if len(next.service.ProfileViews()) != 1 {
 		t.Fatalf("expected 1 imported profile, got %d", len(next.service.ProfileViews()))
+	}
+}
+
+func TestHandleMouseClickOnStackMemberFocusesProfile(t *testing.T) {
+	t.Parallel()
+
+	service, err := app.NewService(storage.SampleConfig(), newStubRuntimeController())
+	if err != nil {
+		t.Fatalf("new service: %v", err)
+	}
+
+	model := Model{
+		service:       service,
+		width:         140,
+		height:        30,
+		focus:         focusStacks,
+		selectedStack: 0,
+		inspectorTab:  inspectorTabDetails,
+	}
+	profiles := filterProfileViews(service.ProfileViews(), "")
+	stacks := filterStackViews(service.StackViews(), "")
+	layout := model.mouseLayout(profiles, stacks)
+
+	if len(layout.stackMembers) == 0 {
+		t.Fatal("expected stack member rows to be clickable")
+	}
+
+	msg := tea.MouseMsg{
+		X:      layout.stackMembers[0].rect.x + 1,
+		Y:      layout.stackMembers[0].rect.y,
+		Action: tea.MouseActionPress,
+		Button: tea.MouseButtonLeft,
+	}
+	next, handled := model.handleMouse(msg, profiles, stacks)
+	if !handled {
+		t.Fatal("expected stack member click to be handled")
+	}
+	if next.focus != focusProfiles {
+		t.Fatalf("expected member click to switch focus to profiles, got %v", next.focus)
+	}
+	if got := next.service.ProfileViews()[next.selectedProfile].Profile.Name; got != "prod-db" {
+		t.Fatalf("expected clicked member prod-db to be focused, got %q", got)
 	}
 }
 
