@@ -1084,13 +1084,19 @@ func TestHintMessageMentionsInspectorTabs(t *testing.T) {
 
 	model := Model{service: service}
 	got := model.hintMessage()
-	if !strings.Contains(got, "h/l inspector") {
+	if !strings.Contains(got, "Tab profiles/stacks") {
+		t.Fatalf("expected focus-switch hint, got %q", got)
+	}
+	if !strings.Contains(got, "h/l details/logs") {
 		t.Fatalf("expected inspector tab hint, got %q", got)
 	}
-	if !strings.Contains(got, "r restart") {
+	if !strings.Contains(got, "Enter start tunnel") {
+		t.Fatalf("expected explicit Enter action, got %q", got)
+	}
+	if !strings.Contains(got, "r restart tunnel") {
 		t.Fatalf("expected restart hint, got %q", got)
 	}
-	if !strings.Contains(got, "g reload") {
+	if !strings.Contains(got, "g reload config") {
 		t.Fatalf("expected reload hint, got %q", got)
 	}
 }

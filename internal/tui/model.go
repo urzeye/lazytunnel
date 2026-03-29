@@ -484,21 +484,111 @@ func (m Model) hintMessage() string {
 		}
 		return m.t("Filter mode: type to search names, labels, targets, and ports. Enter finishes. Esc clears or exits. Backspace/Ctrl+W deletes. Ctrl+U clears.", "筛选模式: 可搜索名称、标签、目标和端口。Enter 完成，Esc 清空或退出，Backspace/Ctrl+W 删除，Ctrl+U 清空。")
 	case m.workspaceIsEmpty():
-		return m.t("i init sample  a draft profile  e edit config  g reload  L language  ", "i 示例配置  a 配置草稿  e 编辑配置  g 重新加载  L 切换语言  ") + m.inlineFilterHint() + m.t("  q quit", "  q 退出")
+		return joinHintParts(
+			m.t("i sample config", "i 示例配置"),
+			m.t("a new tunnel draft", "a 新建隧道草稿"),
+			m.t("e edit config", "e 编辑配置"),
+			m.t("g reload config", "g 重新加载配置"),
+			m.t("L switch language", "L 切换语言"),
+			m.inlineFilterHint(),
+			m.t("q quit", "q 退出"),
+		)
 	}
 
 	profileCount := len(m.service.ProfileViews())
 	stackCount := len(m.service.StackViews())
 	switch {
 	case profileCount == 0:
-		return m.t("a draft profile  e edit config  g reload  L language  ", "a 配置草稿  e 编辑配置  g 重新加载  L 切换语言  ") + m.inlineFilterHint() + m.t("  q quit", "  q 退出")
+		return joinHintParts(
+			m.t("a new tunnel draft", "a 新建隧道草稿"),
+			m.t("e edit config", "e 编辑配置"),
+			m.t("g reload config", "g 重新加载配置"),
+			m.t("L switch language", "L 切换语言"),
+			m.inlineFilterHint(),
+			m.t("q quit", "q 退出"),
+		)
 	case stackCount == 0:
-		return m.t("j/k move  h/l inspector  Enter toggle  r restart  c clone  A stack draft  e edit  g reload  ", "j/k 移动  h/l 检查器  Enter 切换  r 重启  c 克隆  A 组合草稿  e 编辑  g 重新加载  ") + m.inlineFilterHint() + m.t("  q quit", "  q 退出")
+		return joinHintParts(
+			m.t("j/k move", "j/k 移动"),
+			m.t("h/l details/logs", "h/l 详情/日志"),
+			m.inlineToggleHint(),
+			m.inlineRestartHint(),
+			m.t("c clone profile", "c 克隆配置"),
+			m.t("A new stack draft", "A 新建组合草稿"),
+			m.t("e edit config", "e 编辑配置"),
+			m.t("g reload config", "g 重新加载配置"),
+			m.inlineFilterHint(),
+			m.t("q quit", "q 退出"),
+		)
 	case m.focus == focusStacks:
-		return m.t("j/k move  Tab lists  h/l inspector  Enter toggle  r restart  c clone  A stack draft  d delete  g reload  ", "j/k 移动  Tab 列表  h/l 检查器  Enter 切换  r 重启  c 克隆  A 组合草稿  d 删除  g 重新加载  ") + m.inlineFilterHint() + m.t("  q quit", "  q 退出")
+		return joinHintParts(
+			m.t("j/k move", "j/k 移动"),
+			m.t("Tab profiles/stacks", "Tab 配置/组合"),
+			m.t("h/l details/logs", "h/l 详情/日志"),
+			m.inlineToggleHint(),
+			m.inlineRestartHint(),
+			m.t("c clone stack", "c 克隆组合"),
+			m.t("A new stack draft", "A 新建组合草稿"),
+			m.t("d delete stack", "d 删除组合"),
+			m.t("g reload config", "g 重新加载配置"),
+			m.inlineFilterHint(),
+			m.t("q quit", "q 退出"),
+		)
 	default:
-		return m.t("j/k move  Tab lists  h/l inspector  Enter toggle  r restart  c clone  A stack draft  d delete  g reload  ", "j/k 移动  Tab 列表  h/l 检查器  Enter 切换  r 重启  c 克隆  A 组合草稿  d 删除  g 重新加载  ") + m.inlineFilterHint() + m.t("  q quit", "  q 退出")
+		return joinHintParts(
+			m.t("j/k move", "j/k 移动"),
+			m.t("Tab profiles/stacks", "Tab 配置/组合"),
+			m.t("h/l details/logs", "h/l 详情/日志"),
+			m.inlineToggleHint(),
+			m.inlineRestartHint(),
+			m.t("c clone profile", "c 克隆配置"),
+			m.t("A new stack draft", "A 新建组合草稿"),
+			m.t("d delete profile", "d 删除配置"),
+			m.t("g reload config", "g 重新加载配置"),
+			m.inlineFilterHint(),
+			m.t("q quit", "q 退出"),
+		)
 	}
+}
+
+func joinHintParts(parts ...string) string {
+	filtered := make([]string, 0, len(parts))
+	for _, part := range parts {
+		part = strings.TrimSpace(part)
+		if part == "" {
+			continue
+		}
+		filtered = append(filtered, part)
+	}
+	return strings.Join(filtered, "  ")
+}
+
+func (m Model) inlineToggleHint() string {
+	normalized, profiles, stacks := m.currentHintViews()
+	if normalized.focus == focusStacks && len(stacks) > 0 {
+		if stacks[normalized.selectedStack].Status == app.StackStatusRunning {
+			return m.t("Enter stop stack", "Enter 停止组合")
+		}
+		return m.t("Enter start stack", "Enter 启动组合")
+	}
+	if len(profiles) > 0 {
+		if isActiveTunnelStatus(profiles[normalized.selectedProfile].State.Status) {
+			return m.t("Enter stop tunnel", "Enter 停止隧道")
+		}
+		return m.t("Enter start tunnel", "Enter 启动隧道")
+	}
+	return ""
+}
+
+func (m Model) inlineRestartHint() string {
+	normalized, profiles, stacks := m.currentHintViews()
+	if normalized.focus == focusStacks && len(stacks) > 0 {
+		return m.t("r restart stack", "r 重启组合")
+	}
+	if len(profiles) > 0 {
+		return m.t("r restart tunnel", "r 重启隧道")
+	}
+	return ""
 }
 
 func (m Model) inlineFilterHint() string {
@@ -506,6 +596,13 @@ func (m Model) inlineFilterHint() string {
 		return m.t("/ filter logs", "/ 筛选日志")
 	}
 	return m.t("/ filter", "/ 筛选")
+}
+
+func (m Model) currentHintViews() (Model, []app.ProfileView, []app.StackView) {
+	profiles := filterProfileViews(m.service.ProfileViews(), m.filterQuery)
+	stacks := filterStackViews(m.service.StackViews(), m.filterQuery)
+	normalized := m.normalizeSelection(len(profiles), len(stacks))
+	return normalized, profiles, stacks
 }
 
 func (m Model) renderBody(profiles []app.ProfileView, stacks []app.StackView, width, height int) string {
