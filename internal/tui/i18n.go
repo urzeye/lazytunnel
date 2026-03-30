@@ -208,6 +208,8 @@ func profileStartSummary(language domain.Language, status app.StartReadiness) st
 	switch status {
 	case app.StartReadinessActive:
 		return translate(language, "Running now", "正在运行")
+	case app.StartReadinessWarning:
+		return translate(language, "Ready with warnings", "有提醒，可启动")
 	case app.StartReadinessReady:
 		return translate(language, "Ready on Enter", "可按 Enter 启动")
 	case app.StartReadinessBlocked:
@@ -223,6 +225,11 @@ func stackStartSummary(language domain.Language, view app.StackView, analysis ap
 		return translate(language, "Blocked", "已阻塞")
 	case analysis.BlockedCount > 0:
 		return translate(language, "Blocked", "已阻塞")
+	case analysis.WarningCount > 0:
+		if language == domain.LanguageSimplifiedChinese {
+			return fmt.Sprintf("%d 个成员有提醒", analysis.WarningCount)
+		}
+		return "Warnings for " + formatCountNoun(language, analysis.WarningCount, "member", "members", "个成员")
 	case analysis.ReadyCount > 0:
 		if language == domain.LanguageSimplifiedChinese {
 			return fmt.Sprintf("可启动 %d 个成员", analysis.ReadyCount)

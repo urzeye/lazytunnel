@@ -4,6 +4,7 @@ import (
 	"errors"
 	"fmt"
 	"net"
+	"os/exec"
 	"strings"
 
 	"github.com/urzeye/lazytunnel/internal/domain"
@@ -23,6 +24,10 @@ type PortChecker interface {
 	CheckLocalPort(port int) error
 }
 
+type CommandChecker interface {
+	CheckCommand(command string) error
+}
+
 type ConfigPersister func(domain.Config) error
 
 type ServiceOption func(*Service)
@@ -33,14 +38,27 @@ func WithPortChecker(portChecker PortChecker) ServiceOption {
 	}
 }
 
+func WithCommandChecker(commandChecker CommandChecker) ServiceOption {
+	return func(service *Service) {
+		service.commandChecker = commandChecker
+	}
+}
+
+func WithSystemCommandChecks() ServiceOption {
+	return func(service *Service) {
+		service.commandChecker = systemCommandChecker{}
+	}
+}
+
 type Service struct {
-	config      domain.Config
-	supervisor  RuntimeController
-	portChecker PortChecker
-	profiles    map[string]domain.Profile
-	profileList []domain.Profile
-	stacks      map[string]domain.Stack
-	stackList   []domain.Stack
+	config         domain.Config
+	supervisor     RuntimeController
+	portChecker    PortChecker
+	commandChecker CommandChecker
+	profiles       map[string]domain.Profile
+	profileList    []domain.Profile
+	stacks         map[string]domain.Stack
+	stackList      []domain.Stack
 }
 
 type ProfileView struct {
@@ -67,6 +85,7 @@ type StartReadiness string
 
 const (
 	StartReadinessReady   StartReadiness = "ready"
+	StartReadinessWarning StartReadiness = "warning"
 	StartReadinessActive  StartReadiness = "active"
 	StartReadinessBlocked StartReadiness = "blocked"
 )
@@ -75,18 +94,21 @@ type ProfileStartAnalysis struct {
 	Name     string
 	Status   StartReadiness
 	Problems []string
+	Warnings []string
 }
 
 type StackMemberStartAnalysis struct {
 	ProfileName string
 	Status      StartReadiness
 	Problems    []string
+	Warnings    []string
 }
 
 type StackStartAnalysis struct {
 	Name         string
 	Members      []StackMemberStartAnalysis
 	ReadyCount   int
+	WarningCount int
 	ActiveCount  int
 	BlockedCount int
 }
@@ -115,13 +137,14 @@ func NewService(config domain.Config, supervisor RuntimeController, opts ...Serv
 	}
 
 	service := &Service{
-		config:      config,
-		supervisor:  supervisor,
-		portChecker: localhostPortChecker{},
-		profiles:    profiles,
-		profileList: append([]domain.Profile(nil), config.Profiles...),
-		stacks:      stacks,
-		stackList:   append([]domain.Stack(nil), config.Stacks...),
+		config:         config,
+		supervisor:     supervisor,
+		portChecker:    localhostPortChecker{},
+		commandChecker: noopCommandChecker{},
+		profiles:       profiles,
+		profileList:    append([]domain.Profile(nil), config.Profiles...),
+		stacks:         stacks,
+		stackList:      append([]domain.Stack(nil), config.Stacks...),
 	}
 
 	for _, opt := range opts {
@@ -320,9 +343,14 @@ func (s *Service) AnalyzeProfileStart(name string) (ProfileStartAnalysis, error)
 	}
 
 	analysis := ProfileStartAnalysis{Name: profile.Name}
+	analysis.Warnings = append(analysis.Warnings, profileStartWarnings(profile)...)
 	if state, exists := s.supervisor.Snapshot(profile.Name); exists && isActiveStatus(state.Status) {
 		analysis.Status = StartReadinessActive
 		return analysis, nil
+	}
+
+	if err := s.commandChecker.CheckCommand(commandForProfile(profile)); err != nil {
+		analysis.Problems = append(analysis.Problems, err.Error())
 	}
 
 	if err := validateProfileStart(profile); err != nil {
@@ -335,11 +363,18 @@ func (s *Service) AnalyzeProfileStart(name string) (ProfileStartAnalysis, error)
 				analysis.Problems,
 				fmt.Sprintf("local port %d is already used by active profile %q", localPort, owner),
 			)
+		} else if err := s.portChecker.CheckLocalPort(localPort); err != nil {
+			analysis.Problems = append(analysis.Problems, err.Error())
 		}
 	}
 
 	if len(analysis.Problems) > 0 {
 		analysis.Status = StartReadinessBlocked
+		return analysis, nil
+	}
+
+	if len(analysis.Warnings) > 0 {
+		analysis.Status = StartReadinessWarning
 		return analysis, nil
 	}
 
@@ -394,6 +429,12 @@ func (s *Service) AnalyzeStackStart(name string) (StackStartAnalysis, error) {
 			continue
 		}
 
+		member.Warnings = append(member.Warnings, profileStartWarnings(profile)...)
+
+		if err := s.commandChecker.CheckCommand(commandForProfile(profile)); err != nil {
+			member.Problems = append(member.Problems, err.Error())
+		}
+
 		if err := validateProfileStart(profile); err != nil {
 			member.Problems = append(member.Problems, err.Error())
 		}
@@ -404,12 +445,24 @@ func (s *Service) AnalyzeStackStart(name string) (StackStartAnalysis, error) {
 					member.Problems,
 					fmt.Sprintf("local port %d is already reserved by profile %q", localPort, owner),
 				)
+			} else if err := s.portChecker.CheckLocalPort(localPort); err != nil {
+				member.Problems = append(member.Problems, err.Error())
 			}
 		}
 
 		if len(member.Problems) > 0 {
 			member.Status = StartReadinessBlocked
 			analysis.BlockedCount++
+			analysis.Members = append(analysis.Members, member)
+			continue
+		}
+
+		if len(member.Warnings) > 0 {
+			member.Status = StartReadinessWarning
+			analysis.WarningCount++
+			if localPort, managed := managedLocalPort(profile); managed {
+				reservedPorts[localPort] = profile.Name
+			}
 			analysis.Members = append(analysis.Members, member)
 			continue
 		}
@@ -554,6 +607,14 @@ func (s *Service) startProfile(profile domain.Profile) error {
 		return fmt.Errorf("profile %q is already active", profile.Name)
 	}
 
+	if err := s.commandChecker.CheckCommand(commandForProfile(profile)); err != nil {
+		return err
+	}
+
+	if err := validateProfileStart(profile); err != nil {
+		return err
+	}
+
 	if localPort, managed := managedLocalPort(profile); managed {
 		if owner, exists := s.activePortOwner(profile.Name, localPort); exists {
 			return fmt.Errorf("local port %d is already used by active profile %q", localPort, owner)
@@ -604,6 +665,16 @@ func (s *Service) preflightStackStart(stack domain.Stack) ([]domain.Profile, err
 		}
 
 		if state, exists := activeStates[profile.Name]; exists && isActiveStatus(state.Status) {
+			continue
+		}
+
+		if err := s.commandChecker.CheckCommand(commandForProfile(profile)); err != nil {
+			errs = append(errs, fmt.Errorf("profile %q: %w", profile.Name, err))
+			continue
+		}
+
+		if err := validateProfileStart(profile); err != nil {
+			errs = append(errs, fmt.Errorf("profile %q: %w", profile.Name, err))
 			continue
 		}
 
@@ -669,6 +740,50 @@ func defaultRuntimeState(profileName string) domain.RuntimeState {
 func validateProfileStart(profile domain.Profile) error {
 	_, err := BuildProcessSpec(profile)
 	return err
+}
+
+func commandForProfile(profile domain.Profile) string {
+	switch profile.Type {
+	case domain.TunnelTypeKubernetesPortForward:
+		return "kubectl"
+	case domain.TunnelTypeSSHLocal, domain.TunnelTypeSSHRemote, domain.TunnelTypeSSHDynamic:
+		return "ssh"
+	default:
+		return ""
+	}
+}
+
+func profileStartWarnings(profile domain.Profile) []string {
+	warnings := make([]string, 0, 4)
+
+	if hasLabel(profile.Labels, "draft") {
+		warnings = append(warnings, fmt.Sprintf("profile %q is still marked as draft", profile.Name))
+	}
+
+	switch profile.Type {
+	case domain.TunnelTypeKubernetesPortForward:
+		if profile.Kubernetes != nil {
+			if strings.TrimSpace(profile.Kubernetes.Context) == "" {
+				warnings = append(warnings, "kubernetes context is empty; will use the current kubectl context")
+			}
+			if strings.TrimSpace(profile.Kubernetes.Namespace) == "" {
+				warnings = append(warnings, "namespace is empty; will use the context default")
+			}
+		}
+	case domain.TunnelTypeSSHRemote:
+		if profile.SSHRemote != nil && strings.TrimSpace(profile.SSHRemote.BindAddress) == "0.0.0.0" {
+			warnings = append(warnings, "remote bind address 0.0.0.0 may expose this forward publicly")
+		}
+	case domain.TunnelTypeSSHDynamic:
+		if profile.SSHDynamic != nil {
+			bindAddress := strings.TrimSpace(profile.SSHDynamic.BindAddress)
+			if bindAddress != "" && bindAddress != "127.0.0.1" && !strings.EqualFold(bindAddress, "localhost") {
+				warnings = append(warnings, fmt.Sprintf("SOCKS bind address %q is not loopback; other machines may reach this proxy", bindAddress))
+			}
+		}
+	}
+
+	return warnings
 }
 
 func stackStatus(activeCount, total int) StackStatus {
@@ -750,4 +865,31 @@ func (localhostPortChecker) CheckLocalPort(port int) error {
 
 	_ = listener.Close()
 	return nil
+}
+
+type noopCommandChecker struct{}
+
+func (noopCommandChecker) CheckCommand(string) error {
+	return nil
+}
+
+type systemCommandChecker struct{}
+
+func (systemCommandChecker) CheckCommand(command string) error {
+	if strings.TrimSpace(command) == "" {
+		return nil
+	}
+	if _, err := exec.LookPath(command); err != nil {
+		return fmt.Errorf("%s is not installed or not in PATH", command)
+	}
+	return nil
+}
+
+func hasLabel(labels []string, label string) bool {
+	for _, existing := range labels {
+		if existing == label {
+			return true
+		}
+	}
+	return false
 }

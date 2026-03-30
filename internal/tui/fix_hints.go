@@ -55,6 +55,18 @@ func (m Model) profileProblemFix(profile domain.Profile, problem string) string 
 			"先停止 %s，或按 e 改成其他本地端口。",
 			owner,
 		)
+	case strings.Contains(problem, "is unavailable"):
+		return m.t("Stop the process using this local port, or press e and choose another port.", "停止占用这个本地端口的进程，或按 e 改成其他端口。")
+	case strings.Contains(problem, "is still marked as draft"):
+		return m.t("Press e to finish the draft fields, then remove the draft label when ready.", "按 e 完成草稿字段，准备好后再移除 draft 标签。")
+	case strings.Contains(problem, "kubernetes context is empty"):
+		return m.t("Press e to pin a specific Context, or keep it blank intentionally to follow kubectl.", "按 e 固定一个 Context，或者明确接受留空时跟随 kubectl 当前 context。")
+	case strings.Contains(problem, "namespace is empty"):
+		return m.t("Press e to pin a Namespace, or keep it blank intentionally to follow the context default.", "按 e 固定一个命名空间，或者明确接受留空时跟随当前 context 默认值。")
+	case strings.Contains(problem, "remote bind address 0.0.0.0"):
+		return m.t("Press e and switch Bind Address to 127.0.0.1 unless you need public exposure.", "除非你确实需要对外暴露，否则按 e 把监听地址改成 127.0.0.1。")
+	case strings.Contains(problem, "is not loopback; other machines may reach this proxy"):
+		return m.t("Press e and switch Bind Address to 127.0.0.1 unless you need LAN access.", "除非你确实需要局域网访问，否则按 e 把监听地址改成 127.0.0.1。")
 	default:
 		if hasLabel(profile.Labels, "draft") {
 			return m.t("Press e to finish this draft, or press E for raw YAML editing.", "按 e 完成这个草稿，或按 E 直接编辑原始 YAML。")

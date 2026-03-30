@@ -3119,6 +3119,13 @@ func (m Model) renderProfileStartLines(view app.ProfileView, specErr error, widt
 		}
 	}
 
+	for _, warning := range analysis.Warnings {
+		lines = append(lines, renderCompactKeyValue(m.t("Warning", "提醒"), warning, width))
+		if fix := m.profileProblemFix(view.Profile, warning); fix != "" {
+			lines = append(lines, renderCompactKeyValue(m.t("Fix", "修复"), fix, width))
+		}
+	}
+
 	return lines
 }
 
@@ -3136,6 +3143,7 @@ func (m Model) renderStackStartLines(view app.StackView, width int) []string {
 		groupTitleStyle.Render(m.t("Start Plan", "启动计划")),
 		renderCompactKeyValue(m.t("Readiness", "就绪度"), stackStartSummary(m.language(), view, analysis), width),
 		renderCompactKeyValue(m.t("Ready", "可启动"), formatCountNoun(m.language(), analysis.ReadyCount, "member", "members", "个成员"), width),
+		renderCompactKeyValue(m.t("Warnings", "提醒"), formatCountNoun(m.language(), analysis.WarningCount, "member", "members", "个成员"), width),
 		renderCompactKeyValue(m.t("Running", "运行中"), formatCountNoun(m.language(), analysis.ActiveCount, "member", "members", "个成员"), width),
 		renderCompactKeyValue(m.t("Blocked", "已阻塞"), formatCountNoun(m.language(), analysis.BlockedCount, "member", "members", "个成员"), width),
 	}
@@ -3147,7 +3155,15 @@ func (m Model) renderStackStartLines(view app.StackView, width int) []string {
 
 	for _, member := range analysis.Members {
 		if member.Status != app.StartReadinessBlocked {
-			continue
+			for _, warning := range member.Warnings {
+				lines = append(lines, renderCompactKeyValue(member.ProfileName, warning, width))
+				if fix := m.stackProblemFix(view.Stack, member.ProfileName, warning); fix != "" {
+					lines = append(lines, renderCompactKeyValue(m.t("Fix", "修复"), fix, width))
+				}
+			}
+			if member.Status != app.StartReadinessBlocked {
+				continue
+			}
 		}
 		for _, problem := range member.Problems {
 			lines = append(lines, renderCompactKeyValue(member.ProfileName, problem, width))

@@ -182,6 +182,101 @@ func TestRenderStackDetailLinesShowsMissingProfiles(t *testing.T) {
 	}
 }
 
+func TestRenderProfileDetailLinesShowsWarnings(t *testing.T) {
+	t.Parallel()
+
+	service, err := app.NewService(domain.Config{
+		Version: domain.CurrentConfigVersion,
+		Profiles: []domain.Profile{
+			{
+				Name:      "draft-api",
+				Type:      domain.TunnelTypeKubernetesPortForward,
+				LocalPort: 8080,
+				Labels:    []string{"draft"},
+				Kubernetes: &domain.Kubernetes{
+					ResourceType: "service",
+					Resource:     "api",
+					RemotePort:   80,
+				},
+			},
+		},
+	}, newStubRuntimeController())
+	if err != nil {
+		t.Fatalf("new service: %v", err)
+	}
+
+	model := Model{service: service}
+	lines := model.renderProfileDetailLines(service.ProfileViews()[0], 80)
+	rendered := strings.Join(lines, "\n")
+
+	if !strings.Contains(rendered, "Ready with warnings") {
+		t.Fatalf("expected warning readiness, got %q", rendered)
+	}
+	if !strings.Contains(rendered, "Warning") {
+		t.Fatalf("expected warning rows, got %q", rendered)
+	}
+	if !strings.Contains(rendered, "still marked as draft") {
+		t.Fatalf("expected draft warning text, got %q", rendered)
+	}
+	if !strings.Contains(rendered, "finish the draft fields") {
+		t.Fatalf("expected actionable warning fix, got %q", rendered)
+	}
+}
+
+func TestRenderStackDetailLinesShowsWarningMembers(t *testing.T) {
+	t.Parallel()
+
+	service, err := app.NewService(domain.Config{
+		Version: domain.CurrentConfigVersion,
+		Profiles: []domain.Profile{
+			{
+				Name:      "draft-api",
+				Type:      domain.TunnelTypeKubernetesPortForward,
+				LocalPort: 8080,
+				Labels:    []string{"draft"},
+				Kubernetes: &domain.Kubernetes{
+					ResourceType: "service",
+					Resource:     "api",
+					RemotePort:   80,
+				},
+			},
+			{
+				Name:      "prod-db",
+				Type:      domain.TunnelTypeSSHLocal,
+				LocalPort: 5432,
+				SSH: &domain.SSHLocal{
+					Host:       "bastion-prod",
+					RemoteHost: "db.internal",
+					RemotePort: 5432,
+				},
+			},
+		},
+		Stacks: []domain.Stack{
+			{
+				Name:     "warning-dev",
+				Profiles: []string{"draft-api", "prod-db"},
+			},
+		},
+	}, newStubRuntimeController())
+	if err != nil {
+		t.Fatalf("new service: %v", err)
+	}
+
+	model := Model{service: service}
+	lines := model.renderStackDetailLines(service.StackViews()[0], 80)
+	rendered := strings.Join(lines, "\n")
+
+	if !strings.Contains(rendered, "Warnings") {
+		t.Fatalf("expected warning count row, got %q", rendered)
+	}
+	if !strings.Contains(rendered, "still marked as draft") {
+		t.Fatalf("expected member warning text, got %q", rendered)
+	}
+	if !strings.Contains(rendered, "finish the draft fields") {
+		t.Fatalf("expected warning fix hint, got %q", rendered)
+	}
+}
+
 func TestRenderProfileDetailLinesUsesChineseWhenConfigured(t *testing.T) {
 	t.Parallel()
 

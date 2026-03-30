@@ -36,6 +36,9 @@
 ### v0.2
 
 - 更好的健康检查
+- 启动前检查 `ssh` / `kubectl` 是否可用
+- 区分阻塞问题和风险提醒
+- 对 draft、空 Kubernetes context / namespace、暴露型 bind address 给出提醒
 
 ### v0.3
 
@@ -47,3 +50,4 @@
 
 - 优化日志面板的格式、样式和过滤体验
 - 继续把 SSH 和 `kubectl port-forward` 这两类核心工作流打磨到足够顺手
+- 把启动前健康检查继续做深，从“端口冲突”扩展到“命令缺失”和“风险提醒”

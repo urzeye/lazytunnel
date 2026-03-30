@@ -196,3 +196,18 @@ pkg/
 - 补强 stack 相关键盘 / 鼠标交互和操作提示
 - 用带 tag 的版本验证 GitHub Releases 和 `mise` 安装链路
 - 为 README 补截图和演示 GIF
+
+## v0.2 当前进展
+
+启动前健康检查已经从“只看端口冲突”往前推进了一步，目前已覆盖：
+
+- 单 profile 和 stack 启动前的本地端口占用检测
+- `ssh` / `kubectl` 是否存在于 PATH 的检查
+- 在 TUI 详情里区分可阻塞启动的问题和仍可启动的提醒
+- 对 draft、空 Kubernetes context / namespace、SSH 暴露型 bind address 提供提醒和修复建议
+
+下一步可以继续补的方向：
+
+- 更深入的 Kubernetes context / namespace / resource 可达性检查
+- 更明确的 SSH 连通性与配置风险提示
+- 启动 hooks 和更细粒度的预检查扩展点

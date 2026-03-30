@@ -211,6 +211,105 @@ func TestServiceAnalyzeProfileStartReportsManagedPortConflict(t *testing.T) {
 	}
 }
 
+func TestServiceAnalyzeProfileStartReportsUnavailableLocalPort(t *testing.T) {
+	t.Parallel()
+
+	service, err := NewService(
+		testConfig(),
+		newFakeRuntimeController(),
+		WithPortChecker(fakePortChecker{errs: map[int]error{
+			8080: errors.New("local port 8080 is unavailable: address already in use"),
+		}}),
+	)
+	if err != nil {
+		t.Fatalf("new service: %v", err)
+	}
+
+	analysis, err := service.AnalyzeProfileStart("api-debug")
+	if err != nil {
+		t.Fatalf("analyze profile: %v", err)
+	}
+
+	if analysis.Status != StartReadinessBlocked {
+		t.Fatalf("expected blocked status, got %q", analysis.Status)
+	}
+	if len(analysis.Problems) == 0 || !strings.Contains(analysis.Problems[0], "local port 8080 is unavailable") {
+		t.Fatalf("expected unavailable-port problem, got %#v", analysis.Problems)
+	}
+}
+
+func TestServiceAnalyzeProfileStartReportsWarnings(t *testing.T) {
+	t.Parallel()
+
+	cfg := domain.Config{
+		Version: domain.CurrentConfigVersion,
+		Profiles: []domain.Profile{
+			{
+				Name:      "draft-api",
+				Type:      domain.TunnelTypeKubernetesPortForward,
+				LocalPort: 8080,
+				Labels:    []string{"draft"},
+				Kubernetes: &domain.Kubernetes{
+					ResourceType: "service",
+					Resource:     "api",
+					RemotePort:   80,
+				},
+			},
+		},
+	}
+
+	service, err := NewService(cfg, newFakeRuntimeController(), WithPortChecker(fakePortChecker{}))
+	if err != nil {
+		t.Fatalf("new service: %v", err)
+	}
+
+	analysis, err := service.AnalyzeProfileStart("draft-api")
+	if err != nil {
+		t.Fatalf("analyze profile: %v", err)
+	}
+
+	if analysis.Status != StartReadinessWarning {
+		t.Fatalf("expected warning status, got %q", analysis.Status)
+	}
+	if len(analysis.Warnings) < 2 {
+		t.Fatalf("expected multiple warnings, got %#v", analysis.Warnings)
+	}
+	if !strings.Contains(strings.Join(analysis.Warnings, "\n"), "still marked as draft") {
+		t.Fatalf("expected draft warning, got %#v", analysis.Warnings)
+	}
+	if !strings.Contains(strings.Join(analysis.Warnings, "\n"), "current kubectl context") {
+		t.Fatalf("expected current-context warning, got %#v", analysis.Warnings)
+	}
+}
+
+func TestServiceAnalyzeProfileStartReportsMissingCommand(t *testing.T) {
+	t.Parallel()
+
+	service, err := NewService(
+		testConfig(),
+		newFakeRuntimeController(),
+		WithPortChecker(fakePortChecker{}),
+		WithCommandChecker(fakeCommandChecker{errs: map[string]error{
+			"kubectl": errors.New("kubectl is not installed or not in PATH"),
+		}}),
+	)
+	if err != nil {
+		t.Fatalf("new service: %v", err)
+	}
+
+	analysis, err := service.AnalyzeProfileStart("api-debug")
+	if err != nil {
+		t.Fatalf("analyze profile: %v", err)
+	}
+
+	if analysis.Status != StartReadinessBlocked {
+		t.Fatalf("expected blocked status, got %q", analysis.Status)
+	}
+	if len(analysis.Problems) == 0 || !strings.Contains(analysis.Problems[0], "kubectl is not installed or not in PATH") {
+		t.Fatalf("expected missing-command problem, got %#v", analysis.Problems)
+	}
+}
+
 func TestServiceProfileViewsIncludesDefaultStoppedState(t *testing.T) {
 	t.Parallel()
 
@@ -304,6 +403,63 @@ func TestServiceAnalyzeStackStartReportsReadyActiveAndBlockedMembers(t *testing.
 	}
 }
 
+func TestServiceAnalyzeStackStartCountsWarningMembers(t *testing.T) {
+	t.Parallel()
+
+	cfg := domain.Config{
+		Version: domain.CurrentConfigVersion,
+		Profiles: []domain.Profile{
+			{
+				Name:      "draft-api",
+				Type:      domain.TunnelTypeKubernetesPortForward,
+				LocalPort: 8080,
+				Labels:    []string{"draft"},
+				Kubernetes: &domain.Kubernetes{
+					ResourceType: "service",
+					Resource:     "api",
+					RemotePort:   80,
+				},
+			},
+			{
+				Name:      "prod-db",
+				Type:      domain.TunnelTypeSSHLocal,
+				LocalPort: 5432,
+				SSH: &domain.SSHLocal{
+					Host:       "bastion-prod",
+					RemoteHost: "db.internal",
+					RemotePort: 5432,
+				},
+			},
+		},
+		Stacks: []domain.Stack{
+			{
+				Name:     "warning-dev",
+				Profiles: []string{"draft-api", "prod-db"},
+			},
+		},
+	}
+
+	service, err := NewService(cfg, newFakeRuntimeController(), WithPortChecker(fakePortChecker{}))
+	if err != nil {
+		t.Fatalf("new service: %v", err)
+	}
+
+	analysis, err := service.AnalyzeStackStart("warning-dev")
+	if err != nil {
+		t.Fatalf("analyze stack: %v", err)
+	}
+
+	if analysis.WarningCount != 1 || analysis.ReadyCount != 1 || analysis.BlockedCount != 0 {
+		t.Fatalf("unexpected warning analysis counts: %#v", analysis)
+	}
+	if got := analysis.Members[0].Status; got != StartReadinessWarning {
+		t.Fatalf("expected draft-api warning, got %q", got)
+	}
+	if len(analysis.Members[0].Warnings) == 0 || !strings.Contains(analysis.Members[0].Warnings[0], "still marked as draft") {
+		t.Fatalf("expected draft warning, got %#v", analysis.Members[0].Warnings)
+	}
+}
+
 func TestServiceStartStackStartsInactiveMembers(t *testing.T) {
 	t.Parallel()
 
@@ -342,6 +498,62 @@ func TestServiceStartStackRejectsPortConflictBeforeStart(t *testing.T) {
 		t.Fatal("expected stack preflight error")
 	}
 
+	if got := len(runtime.startedSpecs); got != 0 {
+		t.Fatalf("expected no started specs on failed preflight, got %d", got)
+	}
+}
+
+func TestServiceStartProfileRejectsMissingCommandBeforeStart(t *testing.T) {
+	t.Parallel()
+
+	runtime := newFakeRuntimeController()
+	service, err := NewService(
+		testConfig(),
+		runtime,
+		WithPortChecker(fakePortChecker{}),
+		WithCommandChecker(fakeCommandChecker{errs: map[string]error{
+			"kubectl": errors.New("kubectl is not installed or not in PATH"),
+		}}),
+	)
+	if err != nil {
+		t.Fatalf("new service: %v", err)
+	}
+
+	err = service.StartProfile("api-debug")
+	if err == nil {
+		t.Fatal("expected missing-command error")
+	}
+	if !strings.Contains(err.Error(), "kubectl is not installed or not in PATH") {
+		t.Fatalf("expected missing-command error, got %v", err)
+	}
+	if got := len(runtime.startedSpecs); got != 0 {
+		t.Fatalf("expected no started specs on failed start, got %d", got)
+	}
+}
+
+func TestServiceStartStackRejectsMissingCommandBeforeStart(t *testing.T) {
+	t.Parallel()
+
+	runtime := newFakeRuntimeController()
+	service, err := NewService(
+		testConfig(),
+		runtime,
+		WithPortChecker(fakePortChecker{}),
+		WithCommandChecker(fakeCommandChecker{errs: map[string]error{
+			"kubectl": errors.New("kubectl is not installed or not in PATH"),
+		}}),
+	)
+	if err != nil {
+		t.Fatalf("new service: %v", err)
+	}
+
+	err = service.StartStack("backend-dev")
+	if err == nil {
+		t.Fatal("expected missing-command preflight error")
+	}
+	if !strings.Contains(err.Error(), `profile "api-debug": kubectl is not installed or not in PATH`) {
+		t.Fatalf("expected missing-command preflight error, got %v", err)
+	}
 	if got := len(runtime.startedSpecs); got != 0 {
 		t.Fatalf("expected no started specs on failed preflight, got %d", got)
 	}
@@ -597,5 +809,16 @@ func (f fakePortChecker) CheckLocalPort(port int) error {
 		return err
 	}
 
+	return nil
+}
+
+type fakeCommandChecker struct {
+	errs map[string]error
+}
+
+func (f fakeCommandChecker) CheckCommand(command string) error {
+	if err, exists := f.errs[command]; exists {
+		return err
+	}
 	return nil
 }

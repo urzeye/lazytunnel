@@ -26,7 +26,11 @@ func NewRootCommand() *cobra.Command {
 				return fmt.Errorf("load config %q: %w", configPath, err)
 			}
 
-			service, err := app.NewService(cfg, ltruntime.NewSupervisor(ltruntime.ExecProcessFactory{}))
+			service, err := app.NewService(
+				cfg,
+				ltruntime.NewSupervisor(ltruntime.ExecProcessFactory{}),
+				app.WithSystemCommandChecks(),
+			)
 			if err != nil {
 				return fmt.Errorf("build app service: %w", err)
 			}
