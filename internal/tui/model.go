@@ -242,6 +242,7 @@ type mouseImportActionRegion struct {
 
 type mouseStackMemberRegion struct {
 	rect        mouseRect
+	index       int
 	profileName string
 }
 
@@ -255,29 +256,44 @@ type mouseLayout struct {
 	importActions []mouseImportActionRegion
 }
 
+type stackMemberLineInfo struct {
+	index       int
+	profileName string
+}
+
+type inspectorContent struct {
+	lines         []string
+	logHitStarts  []int
+	logMatchCount int
+}
+
 type Model struct {
-	service         *app.Service
-	configPath      string
-	subscriptionID  int
-	events          <-chan ltruntime.Event
-	selectedProfile int
-	selectedStack   int
-	focus           listFocus
-	width           int
-	height          int
-	now             time.Time
-	filterQuery     string
-	logFilterQuery  string
-	filterMode      bool
-	filterScope     filterScope
-	pendingDelete   *deleteRequest
-	importMode      bool
-	inspectorTab    inspectorTab
-	inspectorScroll int
-	lastNotice      string
-	lastNoticeAt    time.Time
-	lastError       string
-	editor          *formEditorState
+	service             *app.Service
+	configPath          string
+	subscriptionID      int
+	events              <-chan ltruntime.Event
+	selectedProfile     int
+	selectedStack       int
+	focus               listFocus
+	width               int
+	height              int
+	now                 time.Time
+	filterQuery         string
+	logFilterQuery      string
+	logSourceFilter     domain.LogSource
+	logFollowPaused     bool
+	logWrap             bool
+	filterMode          bool
+	filterScope         filterScope
+	pendingDelete       *deleteRequest
+	importMode          bool
+	inspectorTab        inspectorTab
+	inspectorScroll     int
+	selectedStackMember int
+	lastNotice          string
+	lastNoticeAt        time.Time
+	lastError           string
+	editor              *formEditorState
 }
 
 func NewModel(service *app.Service, configPath string) Model {
@@ -310,6 +326,9 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		return m, tickClock()
 
 	case runtimeEventMsg:
+		if m.inspectorTab == inspectorTabLogs && !m.logFollowPaused {
+			m.inspectorScroll = 0
+		}
 		return m, waitForRuntimeEvent(m.events)
 
 	case editorFinishedMsg:
@@ -329,6 +348,7 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		profiles := filterProfileViews(m.service.ProfileViews(), m.filterQuery)
 		stacks := filterStackViews(m.service.StackViews(), m.filterQuery)
 		m = m.normalizeSelection(len(profiles), len(stacks))
+		m = m.normalizeStackMemberSelection(stacks)
 
 		var handled bool
 		m, handled = m.handleMouse(msg, profiles, stacks)
@@ -340,6 +360,7 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		profiles := filterProfileViews(m.service.ProfileViews(), m.filterQuery)
 		stacks := filterStackViews(m.service.StackViews(), m.filterQuery)
 		m = m.normalizeSelection(len(profiles), len(stacks))
+		m = m.normalizeStackMemberSelection(stacks)
 
 		if m.editor != nil {
 			var handled bool
@@ -404,6 +425,7 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			if m.defaultFilterScope() == filterScopeLogs {
 				if m.logFilterQuery != "" {
 					m.logFilterQuery = ""
+					m.logFollowPaused = false
 					m.inspectorScroll = 0
 					return m, nil
 				}
@@ -441,6 +463,7 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			if m.focus == focusStacks {
 				if len(stacks) > 0 && m.selectedStack < len(stacks)-1 {
 					m.selectedStack++
+					m.selectedStackMember = 0
 					m.inspectorScroll = 0
 				}
 			} else if len(profiles) > 0 && m.selectedProfile < len(profiles)-1 {
@@ -451,6 +474,7 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			if m.focus == focusStacks {
 				if len(stacks) > 0 && m.selectedStack > 0 {
 					m.selectedStack--
+					m.selectedStackMember = 0
 					m.inspectorScroll = 0
 				}
 			} else if len(profiles) > 0 && m.selectedProfile > 0 {
@@ -488,6 +512,7 @@ func (m Model) View() string {
 	profiles := filterProfileViews(allProfiles, m.filterQuery)
 	stacks := filterStackViews(allStacks, m.filterQuery)
 	m = m.normalizeSelection(len(profiles), len(stacks))
+	m = m.normalizeStackMemberSelection(stacks)
 	width := m.contentWidth()
 	height := m.contentHeight()
 
@@ -642,7 +667,7 @@ func (m Model) hintMessage() string {
 			m.t("h/l details/logs", "h/l 详情/日志"),
 			m.inlineToggleHint(),
 			m.inlineRestartHint(),
-			m.t("p open member", "p 打开成员"),
+			m.inlineStackMemberHint(),
 			m.inlineLogNavigationHint(),
 			m.t("c clone stack", "c 克隆组合"),
 			m.t("i import drafts", "i 导入草稿"),
@@ -730,13 +755,31 @@ func (m Model) inlineLogNavigationHint() string {
 	if m.inspectorTab != inspectorTabLogs {
 		return ""
 	}
-	return m.t("Home latest End oldest", "Home 最新 End 最旧")
+	return m.t("f follow/pause • t/T source • w wrap • n/N hits • Home latest • End oldest", "f 跟随/暂停 • t/T 来源 • w 换行 • n/N 命中 • Home 最新 • End 最旧")
+}
+
+func (m Model) inlineStackMemberHint() string {
+	if m.focus != focusStacks || m.inspectorTab != inspectorTabDetails {
+		return ""
+	}
+
+	normalized, _, stacks := m.currentHintViews()
+	if normalized.focus != focusStacks || len(stacks) == 0 {
+		return ""
+	}
+	selected := stacks[max(0, min(normalized.selectedStack, len(stacks)-1))]
+	if len(selected.Members) == 0 {
+		return ""
+	}
+
+	return m.t("[/] select member • S toggle member • R restart member • p open member", "[/] 选择成员 • S 启停成员 • R 重启成员 • p 打开成员")
 }
 
 func (m Model) currentHintViews() (Model, []app.ProfileView, []app.StackView) {
 	profiles := filterProfileViews(m.service.ProfileViews(), m.filterQuery)
 	stacks := filterStackViews(m.service.StackViews(), m.filterQuery)
 	normalized := m.normalizeSelection(len(profiles), len(stacks))
+	normalized = normalized.normalizeStackMemberSelection(stacks)
 	return normalized, profiles, stacks
 }
 
@@ -876,13 +919,13 @@ func (m Model) renderStackRow(view app.StackView, selected bool, focused bool, w
 
 func (m Model) renderInspectorPanel(profiles []app.ProfileView, stacks []app.StackView, width, height int) string {
 	innerWidth, pageSize := m.inspectorDimensions(width, height)
-	lines := m.currentInspectorLines(profiles, stacks, innerWidth)
-	scroll := m.normalizedInspectorScroll(len(lines), pageSize)
+	content := m.currentInspectorContent(profiles, stacks, innerWidth)
+	scroll := m.normalizedInspectorScroll(len(content.lines), pageSize)
 
 	body := make([]string, 0, pageSize+2)
 	body = append(body, m.renderInspectorTabs(innerWidth))
-	body = append(body, padLines(clipLines(lines, scroll, pageSize), pageSize)...)
-	body = append(body, m.renderInspectorScrollLine(scroll, pageSize, len(lines), innerWidth))
+	body = append(body, padLines(clipLines(content.lines, scroll, pageSize), pageSize)...)
+	body = append(body, m.renderInspectorScrollLine(scroll, pageSize, content, innerWidth))
 
 	return renderFixedPanel(m.inspectorTitle(profiles, stacks), body, width, height, false)
 }
@@ -907,7 +950,8 @@ func (m Model) renderInspectorTabs(width int) string {
 	return lipgloss.NewStyle().Width(max(1, width)).Render(line)
 }
 
-func (m Model) renderInspectorScrollLine(scroll, pageSize, total, width int) string {
+func (m Model) renderInspectorScrollLine(scroll, pageSize int, content inspectorContent, width int) string {
+	total := len(content.lines)
 	if total == 0 {
 		return renderInlineText(mutedStyle, m.t("Lines 0/0", "行 0/0"), width)
 	}
@@ -921,43 +965,57 @@ func (m Model) renderInspectorScrollLine(scroll, pageSize, total, width int) str
 
 	text := m.tf("Lines %d-%d/%d", "行 %d-%d/%d", start, end, total)
 	if m.inspectorTab == inspectorTabLogs {
-		mode := m.t("latest visible", "正在看最新")
-		if scroll > 0 {
-			mode = m.t("reviewing older logs", "正在看较旧日志")
+		parts := []string{
+			text,
+			m.tf("mode %s", "模式 %s", m.activeLogModeLabel()),
+			m.tf("source %s", "来源 %s", m.activeLogSourceFilterLabel()),
+			m.tf("view %s", "视图 %s", m.activeLogWrapLabel()),
+			m.t("Home latest • End oldest", "Home 最新 • End 最旧"),
 		}
-		text = text + " • " + mode + " • " + m.t("Home latest • End oldest", "Home 最新 • End 最旧")
+		if content.logMatchCount > 0 {
+			currentMatch, totalMatches := currentLogMatchPosition(scroll, content.logHitStarts)
+			parts = append(parts,
+				m.tf("hit %d/%d", "命中 %d/%d", currentMatch, totalMatches),
+				m.t("n next • N prev", "n 下一个 • N 上一个"),
+			)
+		}
+		text = strings.Join(parts, " • ")
 	}
 
 	return renderInlineText(mutedStyle, text, width)
 }
 
-func (m Model) currentInspectorLines(profiles []app.ProfileView, stacks []app.StackView, width int) []string {
+func (m Model) currentInspectorContent(profiles []app.ProfileView, stacks []app.StackView, width int) inspectorContent {
 	if m.inspectorTab == inspectorTabLogs {
 		if m.focus == focusStacks && len(stacks) > 0 {
-			return m.renderStackLogLines(stacks[m.selectedStack], width)
+			return m.renderStackLogContent(stacks[m.selectedStack], width)
 		}
 		if len(profiles) > 0 {
-			return m.renderProfileLogLines(profiles[m.selectedProfile], width)
+			return m.renderProfileLogContent(profiles[m.selectedProfile], width)
 		}
 		if m.filterQuery != "" {
-			return []string{mutedStyle.Render(truncateText(m.t("No filtered profile is selected, so there are no logs to show.", "当前没有选中筛选后的配置，因此没有可显示的日志。"), width))}
+			return inspectorContent{lines: []string{mutedStyle.Render(truncateText(m.t("No filtered profile is selected, so there are no logs to show.", "当前没有选中筛选后的配置，因此没有可显示的日志。"), width))}}
 		}
-		return []string{mutedStyle.Render(truncateText(m.t("Start a tunnel to see runtime output here.", "启动隧道后，这里会显示运行日志。"), width))}
+		return inspectorContent{lines: []string{mutedStyle.Render(truncateText(m.t("Start a tunnel to see runtime output here.", "启动隧道后，这里会显示运行日志。"), width))}}
 	}
 
 	if m.focus == focusStacks && len(stacks) > 0 {
-		return m.renderStackDetailLines(stacks[m.selectedStack], width)
+		return inspectorContent{lines: m.renderStackDetailLines(stacks[m.selectedStack], width)}
 	}
 	if len(profiles) > 0 {
-		return m.renderProfileDetailLines(profiles[m.selectedProfile], width)
+		return inspectorContent{lines: m.renderProfileDetailLines(profiles[m.selectedProfile], width)}
 	}
 	if m.filterQuery != "" {
-		return []string{mutedStyle.Render(truncateText(m.t("No profile matches the current filter.", "当前筛选下没有匹配的配置。"), width))}
+		return inspectorContent{lines: []string{mutedStyle.Render(truncateText(m.t("No profile matches the current filter.", "当前筛选下没有匹配的配置。"), width))}}
 	}
 	if m.workspaceIsEmpty() {
-		return m.renderEmptyInspectorLines(width)
+		return inspectorContent{lines: m.renderEmptyInspectorLines(width)}
 	}
-	return []string{mutedStyle.Render(truncateText(m.t("No profile selected.", "当前没有选中的配置。"), width))}
+	return inspectorContent{lines: []string{mutedStyle.Render(truncateText(m.t("No profile selected.", "当前没有选中的配置。"), width))}}
+}
+
+func (m Model) currentInspectorLines(profiles []app.ProfileView, stacks []app.StackView, width int) []string {
+	return m.currentInspectorContent(profiles, stacks, width).lines
 }
 
 func (m Model) renderProfileDetailLines(view app.ProfileView, width int) []string {
@@ -1024,7 +1082,7 @@ func (m Model) renderStackDetailLines(view app.StackView, width int) []string {
 	return lines
 }
 
-func (m Model) renderStackDetailContent(view app.StackView, width int) ([]string, map[int]string) {
+func (m Model) renderStackDetailContent(view app.StackView, width int) ([]string, map[int]stackMemberLineInfo) {
 	language := m.language()
 	lines := []string{
 		composeStyledLine(
@@ -1038,18 +1096,15 @@ func (m Model) renderStackDetailContent(view app.StackView, width int) ([]string
 		renderCompactKeyValue(m.t("Coverage", "覆盖率"), m.tf("%d/%d running", "%d/%d 运行中", view.ActiveCount, len(view.Members)), width),
 		groupTitleStyle.Render(m.t("Members", "成员")),
 	}
-	memberLineProfiles := make(map[int]string, len(view.Members))
+	memberLineProfiles := make(map[int]stackMemberLineInfo, len(view.Members))
+	selectedMember := max(0, min(m.selectedStackMember, max(0, len(view.Members)-1)))
 
 	if len(view.Members) == 0 {
 		lines = append(lines, mutedStyle.Render(truncateText(m.t("No member profiles resolved from config.", "配置里没有解析出任何成员配置。"), width)))
 	} else {
-		for _, member := range view.Members {
-			memberLineProfiles[len(lines)] = member.Profile.Name
-			lines = append(lines, composeStyledLine(
-				renderStatusBadge(language, member.State.Status)+" ",
-				fmt.Sprintf("%s  %s  %s", member.Profile.Name, profileListPort(member.Profile), profileTarget(language, member.Profile)),
-				width,
-			))
+		for idx, member := range view.Members {
+			memberLineProfiles[len(lines)] = stackMemberLineInfo{index: idx, profileName: member.Profile.Name}
+			lines = append(lines, m.renderStackMemberDetailLine(member, idx == selectedMember, width))
 		}
 	}
 
@@ -1084,12 +1139,16 @@ func (m Model) renderStackDetailContent(view app.StackView, width int) ([]string
 }
 
 func (m Model) renderProfileLogLines(view app.ProfileView, width int) []string {
-	filtered := filterLogEntries(view.State.RecentLogs, m.logFilterQuery)
+	return m.renderProfileLogContent(view, width).lines
+}
+
+func (m Model) renderProfileLogContent(view app.ProfileView, width int) inspectorContent {
+	filtered := filterLogEntriesBySource(view.State.RecentLogs, m.logFilterQuery, m.logSourceFilter)
 	if len(view.State.RecentLogs) == 0 {
-		return []string{mutedStyle.Render(truncateText(m.t("No logs yet. Start the tunnel to collect runtime output.", "还没有日志。启动隧道后，这里会显示运行输出。"), width))}
+		return inspectorContent{lines: []string{mutedStyle.Render(truncateText(m.t("No logs yet. Start the tunnel to collect runtime output.", "还没有日志。启动隧道后，这里会显示运行输出。"), width))}}
 	}
 	if len(filtered) == 0 {
-		return []string{mutedStyle.Render(truncateText(m.tf("No logs match %q. Press Esc to clear the log filter.", "没有匹配 %q 的日志。按 Esc 清除日志筛选。", m.logFilterQuery), width))}
+		return inspectorContent{lines: []string{mutedStyle.Render(truncateText(m.noProfileLogMatchMessage(), width))}}
 	}
 
 	lines := make([]string, 0, len(filtered)+3)
@@ -1100,26 +1159,39 @@ func (m Model) renderProfileLogLines(view app.ProfileView, width int) []string {
 		width,
 		false,
 	)...)
+	recordHits := m.logFilterQuery != "" || m.logSourceFilter != ""
+	hitStarts := make([]int, 0, len(filtered))
 	for idx := len(filtered) - 1; idx >= 0; idx-- {
 		entry := filtered[idx]
-		lines = append(lines, renderLogLine(entry.Timestamp, "", entry.Source, entry.Message, m.logFilterQuery, width))
+		if recordHits {
+			hitStarts = append(hitStarts, len(lines))
+		}
+		lines = append(lines, renderLogEntryLines(entry.Timestamp, "", entry.Source, entry.Message, m.logFilterQuery, width, m.logWrap)...)
 	}
 
-	return lines
+	return inspectorContent{
+		lines:         lines,
+		logHitStarts:  hitStarts,
+		logMatchCount: len(hitStarts),
+	}
 }
 
 func (m Model) renderStackLogLines(view app.StackView, width int) []string {
+	return m.renderStackLogContent(view, width).lines
+}
+
+func (m Model) renderStackLogContent(view app.StackView, width int) inspectorContent {
 	totalEntries := 0
 	for _, member := range view.Members {
 		totalEntries += len(member.State.RecentLogs)
 	}
 	if totalEntries == 0 {
-		return []string{mutedStyle.Render(truncateText(m.t("No recent stack activity yet. Start a member to begin collecting logs.", "还没有最近的组合活动。启动任一成员后，这里会开始显示日志。"), width))}
+		return inspectorContent{lines: []string{mutedStyle.Render(truncateText(m.t("No recent stack activity yet. Start a member to begin collecting logs.", "还没有最近的组合活动。启动任一成员后，这里会开始显示日志。"), width))}}
 	}
 
-	activity := filterStackActivity(recentStackActivity(view, totalEntries), m.logFilterQuery)
+	activity := filterStackActivityBySource(recentStackActivity(view, totalEntries), m.logFilterQuery, m.logSourceFilter)
 	if len(activity) == 0 {
-		return []string{mutedStyle.Render(truncateText(m.tf("No stack logs match %q. Press Esc to clear the log filter.", "没有匹配 %q 的组合日志。按 Esc 清除日志筛选。", m.logFilterQuery), width))}
+		return inspectorContent{lines: []string{mutedStyle.Render(truncateText(m.noStackLogMatchMessage(), width))}}
 	}
 
 	lines := make([]string, 0, len(activity)+3)
@@ -1135,12 +1207,21 @@ func (m Model) renderStackLogLines(view app.StackView, width int) []string {
 		width,
 		true,
 	)...)
+	recordHits := m.logFilterQuery != "" || m.logSourceFilter != ""
+	hitStarts := make([]int, 0, len(activity))
 	for idx := len(activity) - 1; idx >= 0; idx-- {
 		entry := activity[idx]
-		lines = append(lines, renderLogLine(entry.Log.Timestamp, entry.ProfileName, entry.Log.Source, entry.Log.Message, m.logFilterQuery, width))
+		if recordHits {
+			hitStarts = append(hitStarts, len(lines))
+		}
+		lines = append(lines, renderLogEntryLines(entry.Log.Timestamp, entry.ProfileName, entry.Log.Source, entry.Log.Message, m.logFilterQuery, width, m.logWrap)...)
 	}
 
-	return lines
+	return inspectorContent{
+		lines:         lines,
+		logHitStarts:  hitStarts,
+		logMatchCount: len(hitStarts),
+	}
 }
 
 func (m Model) renderLogSummaryLines(summary string, counts logSourceCounts, query string, width int, includeProfiles bool) []string {
@@ -1192,6 +1273,209 @@ func (m Model) normalizeSelection(profileCount, stackCount int) Model {
 
 	m.selectedStack = max(0, min(m.selectedStack, stackCount-1))
 	return m
+}
+
+func (m Model) normalizeStackMemberSelection(stacks []app.StackView) Model {
+	if len(stacks) == 0 {
+		m.selectedStackMember = 0
+		return m
+	}
+
+	selectedStack := stacks[max(0, min(m.selectedStack, len(stacks)-1))]
+	if len(selectedStack.Members) == 0 {
+		m.selectedStackMember = 0
+		return m
+	}
+
+	m.selectedStackMember = max(0, min(m.selectedStackMember, len(selectedStack.Members)-1))
+	return m
+}
+
+func (m Model) currentSelectedStackMember(stacks []app.StackView) (app.ProfileView, app.StackView, bool) {
+	if len(stacks) == 0 {
+		return app.ProfileView{}, app.StackView{}, false
+	}
+
+	stack := stacks[max(0, min(m.selectedStack, len(stacks)-1))]
+	if len(stack.Members) == 0 {
+		return app.ProfileView{}, stack, false
+	}
+
+	memberIdx := max(0, min(m.selectedStackMember, len(stack.Members)-1))
+	return stack.Members[memberIdx], stack, true
+}
+
+func (m Model) setInspectorScroll(scroll int) Model {
+	m.inspectorScroll = max(0, scroll)
+	if m.inspectorTab == inspectorTabLogs {
+		m.logFollowPaused = m.inspectorScroll > 0
+	}
+	return m
+}
+
+func (m Model) toggleLogFollow() Model {
+	if m.logFollowPaused {
+		m.logFollowPaused = false
+		m.inspectorScroll = 0
+		return m
+	}
+	m.logFollowPaused = true
+	return m
+}
+
+func (m Model) moveSelectedStackMember(stacks []app.StackView, delta int) Model {
+	if len(stacks) == 0 {
+		return m
+	}
+
+	selected := stacks[max(0, min(m.selectedStack, len(stacks)-1))]
+	if len(selected.Members) == 0 {
+		m.lastError = m.t("Selected stack has no resolved members yet.", "当前组合还没有已解析的成员。")
+		return m
+	}
+
+	m.lastError = ""
+	m.selectedStackMember = max(0, min(m.selectedStackMember+delta, len(selected.Members)-1))
+	return m
+}
+
+func (m Model) toggleSelectedStackMember(stacks []app.StackView) Model {
+	m.lastError = ""
+	m.lastNotice = ""
+	m.importMode = false
+
+	member, stack, ok := m.currentSelectedStackMember(stacks)
+	if !ok {
+		m.lastError = m.t("Selected stack has no resolved member profiles to control yet.", "当前组合还没有可直接操作的已解析成员配置。")
+		return m
+	}
+
+	if err := m.service.ToggleProfile(member.Profile.Name); err != nil {
+		m.lastError = err.Error()
+		return m
+	}
+
+	if isActiveTunnelStatus(member.State.Status) {
+		if m.language() == domain.LanguageSimplifiedChinese {
+			m.setNotice(fmt.Sprintf("已停止组合 %s 的成员 %s。", stack.Stack.Name, member.Profile.Name))
+		} else {
+			m.setNotice(fmt.Sprintf("Stopped member %s in stack %s.", member.Profile.Name, stack.Stack.Name))
+		}
+		return m
+	}
+
+	if m.language() == domain.LanguageSimplifiedChinese {
+		m.setNotice(fmt.Sprintf("已启动组合 %s 的成员 %s。", stack.Stack.Name, member.Profile.Name))
+	} else {
+		m.setNotice(fmt.Sprintf("Started member %s in stack %s.", member.Profile.Name, stack.Stack.Name))
+	}
+	return m
+}
+
+func (m Model) restartSelectedStackMember(stacks []app.StackView) Model {
+	m.lastError = ""
+	m.lastNotice = ""
+	m.importMode = false
+
+	member, stack, ok := m.currentSelectedStackMember(stacks)
+	if !ok {
+		m.lastError = m.t("Selected stack has no resolved member profiles to control yet.", "当前组合还没有可直接操作的已解析成员配置。")
+		return m
+	}
+
+	if err := m.service.RestartProfile(member.Profile.Name); err != nil {
+		m.lastError = err.Error()
+		return m
+	}
+
+	if m.language() == domain.LanguageSimplifiedChinese {
+		m.setNotice(fmt.Sprintf("已重启组合 %s 的成员 %s。", stack.Stack.Name, member.Profile.Name))
+	} else {
+		m.setNotice(fmt.Sprintf("Restarted member %s in stack %s.", member.Profile.Name, stack.Stack.Name))
+	}
+	return m
+}
+
+func (m Model) navigateLogMatches(content inspectorContent, delta int) Model {
+	if len(content.logHitStarts) == 0 || delta == 0 {
+		return m
+	}
+
+	next := content.logHitStarts[0]
+	if delta > 0 {
+		for _, start := range content.logHitStarts {
+			if start > m.inspectorScroll {
+				next = start
+				return m.setInspectorScroll(next)
+			}
+		}
+		return m.setInspectorScroll(next)
+	}
+
+	next = content.logHitStarts[len(content.logHitStarts)-1]
+	for idx := len(content.logHitStarts) - 1; idx >= 0; idx-- {
+		if content.logHitStarts[idx] < m.inspectorScroll {
+			next = content.logHitStarts[idx]
+			break
+		}
+	}
+	return m.setInspectorScroll(next)
+}
+
+func (m Model) cycleLogSourceFilter(delta int) Model {
+	options := []domain.LogSource{"", domain.LogSourceSystem, domain.LogSourceStdout, domain.LogSourceStderr}
+	current := 0
+	for idx, option := range options {
+		if option == m.logSourceFilter {
+			current = idx
+			break
+		}
+	}
+
+	current = (current + delta + len(options)) % len(options)
+	m.logSourceFilter = options[current]
+	return m
+}
+
+func (m Model) activeLogModeLabel() string {
+	if m.logFollowPaused {
+		return m.t("paused", "已暂停")
+	}
+	return m.t("following latest", "跟随最新")
+}
+
+func (m Model) activeLogWrapLabel() string {
+	if m.logWrap {
+		return m.t("wrap", "换行")
+	}
+	return m.t("truncate", "截断")
+}
+
+func (m Model) activeLogSourceFilterLabel() string {
+	switch m.logSourceFilter {
+	case domain.LogSourceSystem:
+		return m.t("system", "system")
+	case domain.LogSourceStdout:
+		return m.t("stdout", "stdout")
+	case domain.LogSourceStderr:
+		return m.t("stderr", "stderr")
+	default:
+		return m.t("all", "全部")
+	}
+}
+
+func (m Model) noProfileLogMatchMessage() string {
+	if m.logFilterQuery != "" && m.logSourceFilter == "" {
+		return m.tf("No logs match %q. Press Esc to clear the log filter.", "没有匹配 %q 的日志。按 Esc 清除日志筛选。", m.logFilterQuery)
+	}
+	return m.t("No logs match the current log filters. Press Esc to clear text filtering or t/T to change source.", "当前日志筛选没有命中。按 Esc 清除文本筛选，或按 t/T 切换来源。")
+}
+
+func (m Model) noStackLogMatchMessage() string {
+	if m.logFilterQuery != "" && m.logSourceFilter == "" {
+		return m.tf("No stack logs match %q. Press Esc to clear the log filter.", "没有匹配 %q 的组合日志。按 Esc 清除日志筛选。", m.logFilterQuery)
+	}
+	return m.t("No stack logs match the current log filters. Press Esc to clear text filtering or t/T to change source.", "当前组合日志筛选没有命中。按 Esc 清除文本筛选，或按 t/T 切换来源。")
 }
 
 func (m Model) selectedLabel(profiles []app.ProfileView, stacks []app.StackView) string {
@@ -1416,20 +1700,18 @@ func (m Model) focusSelectedStackMember(stacks []app.StackView) Model {
 	m.lastError = ""
 	m.lastNotice = ""
 
-	if m.focus != focusStacks || len(stacks) == 0 {
+	member, stack, ok := m.currentSelectedStackMember(stacks)
+	if m.focus != focusStacks || len(stacks) == 0 || !ok {
+		if m.focus == focusStacks && len(stacks) > 0 {
+			m.lastError = m.t("Selected stack has no resolved member profiles to open yet.", "当前组合还没有可打开的已解析成员配置。")
+		}
 		return m
 	}
 
-	selected := stacks[max(0, min(m.selectedStack, len(stacks)-1))]
-	if len(selected.Members) == 0 {
-		m.lastError = m.t("Selected stack has no resolved member profiles to open yet.", "当前组合还没有可打开的已解析成员配置。")
-		return m
-	}
-
-	profileName := selected.Members[0].Profile.Name
-	notice := m.tf("Opened member profile %s from stack %s.", "已从组合 %s 打开成员配置 %s。", profileName, selected.Stack.Name)
+	profileName := member.Profile.Name
+	notice := m.tf("Opened member profile %s from stack %s.", "已从组合 %s 打开成员配置 %s。", profileName, stack.Stack.Name)
 	if m.language() == domain.LanguageSimplifiedChinese {
-		notice = fmt.Sprintf("已从组合 %s 打开成员配置 %s。", selected.Stack.Name, profileName)
+		notice = fmt.Sprintf("已从组合 %s 打开成员配置 %s。", stack.Stack.Name, profileName)
 	}
 	return m.focusProfileByName(
 		profileName,
@@ -1575,6 +1857,7 @@ func (m Model) reloadConfigFromDisk(successNotice string) Model {
 	m.service.ReplaceConfig(cfg)
 	m.selectedProfile = 0
 	m.selectedStack = 0
+	m.selectedStackMember = 0
 	m.inspectorScroll = 0
 	m.pendingDelete = nil
 	m.setNotice(successNotice)
@@ -1598,9 +1881,11 @@ func (m *Model) selectStackByName(name string) {
 			continue
 		}
 		m.selectedStack = idx
+		m.selectedStackMember = 0
 		return
 	}
 	m.selectedStack = 0
+	m.selectedStackMember = 0
 }
 
 func (m Model) focusProfileByName(name string, notice string) Model {
@@ -1661,6 +1946,13 @@ func shellQuote(value string) string {
 }
 
 func (m Model) handleInspectorKey(msg tea.KeyMsg, profiles []app.ProfileView, stacks []app.StackView) (Model, bool) {
+	contentWidth := panelInnerWidth(m.inspectorPanelRect().width)
+	if contentWidth <= 1 {
+		contentWidth = panelInnerWidth(m.contentWidth())
+	}
+	content := m.currentInspectorContent(profiles, stacks, contentWidth)
+	pageSize := m.inspectorPageSize()
+
 	switch msg.String() {
 	case "left", "h":
 		if m.inspectorTab != inspectorTabDetails {
@@ -1674,22 +1966,84 @@ func (m Model) handleInspectorKey(msg tea.KeyMsg, profiles []app.ProfileView, st
 			m.inspectorScroll = 0
 		}
 		return m, true
-	case "pgup", "ctrl+u":
-		pageSize := m.inspectorPageSize()
-		m.inspectorScroll = max(0, m.inspectorScroll-pageSize)
+	case "f":
+		if m.inspectorTab != inspectorTabLogs {
+			return m, false
+		}
+		m = m.toggleLogFollow()
 		return m, true
-	case "pgdown", "ctrl+d":
-		pageSize := m.inspectorPageSize()
-		maxScroll := max(0, len(m.currentInspectorLines(profiles, stacks, panelInnerWidth(m.contentWidth())))-pageSize)
-		m.inspectorScroll = min(maxScroll, m.inspectorScroll+pageSize)
-		return m, true
-	case "home":
+	case "t":
+		if m.inspectorTab != inspectorTabLogs {
+			return m, false
+		}
+		m = m.cycleLogSourceFilter(1)
+		m.logFollowPaused = false
 		m.inspectorScroll = 0
 		return m, true
+	case "T":
+		if m.inspectorTab != inspectorTabLogs {
+			return m, false
+		}
+		m = m.cycleLogSourceFilter(-1)
+		m.logFollowPaused = false
+		m.inspectorScroll = 0
+		return m, true
+	case "w":
+		if m.inspectorTab != inspectorTabLogs {
+			return m, false
+		}
+		m.logWrap = !m.logWrap
+		m.inspectorScroll = m.normalizedInspectorScroll(len(m.currentInspectorContent(profiles, stacks, contentWidth).lines), pageSize)
+		return m, true
+	case "n":
+		if m.inspectorTab != inspectorTabLogs {
+			return m, false
+		}
+		m = m.navigateLogMatches(content, 1)
+		return m, true
+	case "N":
+		if m.inspectorTab != inspectorTabLogs {
+			return m, false
+		}
+		m = m.navigateLogMatches(content, -1)
+		return m, true
+	case "[":
+		if m.focus != focusStacks || m.inspectorTab != inspectorTabDetails {
+			return m, false
+		}
+		m = m.moveSelectedStackMember(stacks, -1)
+		return m, true
+	case "]":
+		if m.focus != focusStacks || m.inspectorTab != inspectorTabDetails {
+			return m, false
+		}
+		m = m.moveSelectedStackMember(stacks, 1)
+		return m, true
+	case "S":
+		if m.focus != focusStacks || m.inspectorTab != inspectorTabDetails {
+			return m, false
+		}
+		m = m.toggleSelectedStackMember(stacks)
+		return m, true
+	case "R":
+		if m.focus != focusStacks || m.inspectorTab != inspectorTabDetails {
+			return m, false
+		}
+		m = m.restartSelectedStackMember(stacks)
+		return m, true
+	case "pgup", "ctrl+u":
+		m = m.setInspectorScroll(max(0, m.inspectorScroll-pageSize))
+		return m, true
+	case "pgdown", "ctrl+d":
+		maxScroll := max(0, len(content.lines)-pageSize)
+		m = m.setInspectorScroll(min(maxScroll, m.inspectorScroll+pageSize))
+		return m, true
+	case "home":
+		m = m.setInspectorScroll(0)
+		return m, true
 	case "end":
-		pageSize := m.inspectorPageSize()
-		maxScroll := max(0, len(m.currentInspectorLines(profiles, stacks, panelInnerWidth(m.contentWidth())))-pageSize)
-		m.inspectorScroll = maxScroll
+		maxScroll := max(0, len(content.lines)-pageSize)
+		m = m.setInspectorScroll(maxScroll)
 		return m, true
 	default:
 		return m, false
@@ -1778,7 +2132,7 @@ func (m Model) handleMouse(msg tea.MouseMsg, profiles []app.ProfileView, stacks 
 			continue
 		}
 
-		m = m.focusProfileByName(region.profileName, "")
+		m.selectedStackMember = region.index
 		return m, true
 	}
 
@@ -1792,6 +2146,7 @@ func (m Model) handleMouse(msg tea.MouseMsg, profiles []app.ProfileView, stacks 
 	if idx, ok := layout.stacks.rowIndexAt(msg.X, msg.Y); ok {
 		m.focus = focusStacks
 		m.selectedStack = idx
+		m.selectedStackMember = 0
 		m.inspectorScroll = 0
 		return m, true
 	}
@@ -1821,18 +2176,19 @@ func (m Model) handleImportKey(msg tea.KeyMsg) (Model, bool) {
 
 func (m Model) scrollInspectorMouse(button tea.MouseButton, profiles []app.ProfileView, stacks []app.StackView) Model {
 	delta := max(1, m.inspectorPageSize()/4)
-	total := len(m.currentInspectorLines(profiles, stacks, panelInnerWidth(m.inspectorPanelRect().width)))
+	total := len(m.currentInspectorContent(profiles, stacks, panelInnerWidth(m.inspectorPanelRect().width)).lines)
 	pageSize := m.inspectorPageSize()
 	maxScroll := max(0, total-pageSize)
+	nextScroll := m.inspectorScroll
 
 	switch button {
 	case tea.MouseButtonWheelUp:
-		m.inspectorScroll = max(0, m.inspectorScroll-delta)
+		nextScroll = max(0, m.inspectorScroll-delta)
 	case tea.MouseButtonWheelDown:
-		m.inspectorScroll = min(maxScroll, m.inspectorScroll+delta)
+		nextScroll = min(maxScroll, m.inspectorScroll+delta)
 	}
 
-	return m
+	return m.setInspectorScroll(nextScroll)
 }
 
 func (m Model) buildDeleteRequest(profiles []app.ProfileView, stacks []app.StackView) *deleteRequest {
@@ -2377,7 +2733,7 @@ func (m Model) stackMemberRegions(stacks []app.StackView, panel mouseRect) []mou
 	pageStartY := panelBodyStartY(panel) + 1
 	regions := make([]mouseStackMemberRegion, 0, len(memberLineProfiles))
 	for row := 0; row < pageSize && scroll+row < len(lines); row++ {
-		profileName, exists := memberLineProfiles[scroll+row]
+		info, exists := memberLineProfiles[scroll+row]
 		if !exists {
 			continue
 		}
@@ -2389,7 +2745,8 @@ func (m Model) stackMemberRegions(stacks []app.StackView, panel mouseRect) []mou
 				width:  innerWidth,
 				height: 1,
 			},
-			profileName: profileName,
+			index:       info.index,
+			profileName: info.profileName,
 		})
 	}
 
@@ -2481,10 +2838,12 @@ func (m Model) updateActiveFilterQuery(query string) Model {
 	switch m.activeFilterScope() {
 	case filterScopeLogs:
 		m.logFilterQuery = query
+		m.logFollowPaused = false
 	default:
 		m.filterQuery = query
 		m.selectedProfile = 0
 		m.selectedStack = 0
+		m.selectedStackMember = 0
 	}
 	return m
 }
@@ -2825,10 +3184,9 @@ func (m Model) stackActionLines(view app.StackView, width int) []string {
 		toggleLabel = m.t("stop stack", "停止组合")
 	}
 
-	return []string{
+	lines := []string{
 		renderActionLine("Enter", toggleLabel, width),
 		renderActionLine("r", m.t("restart stack", "重启组合"), width),
-		renderActionLine("p", m.t("open first member profile", "打开第一个成员配置"), width),
 		renderActionLine("c", m.t("clone stack draft", "克隆组合草稿"), width),
 		renderActionLine("A", m.t("create another stack draft", "再创建一个组合草稿"), width),
 		renderActionLine("e", m.t("edit selected stack in form", "在表单里编辑当前组合"), width),
@@ -2836,6 +3194,26 @@ func (m Model) stackActionLines(view app.StackView, width int) []string {
 		renderActionLine("g", m.t("reload config from disk", "从磁盘重新加载配置"), width),
 		renderActionLine("d", m.t("delete stack", "删除组合"), width),
 	}
+
+	if len(view.Members) == 0 {
+		return lines
+	}
+
+	member := view.Members[max(0, min(m.selectedStackMember, len(view.Members)-1))]
+	memberToggleLabel := m.t("start selected member", "启动当前成员")
+	if isActiveTunnelStatus(member.State.Status) {
+		memberToggleLabel = m.t("stop selected member", "停止当前成员")
+	}
+
+	lines = append(lines[:2], append([]string{
+		renderActionLine("[/]", m.t("select member row", "切换成员行"), width),
+		renderActionLine("S", memberToggleLabel, width),
+		renderActionLine("R", m.t("restart selected member", "重启当前成员"), width),
+		renderActionLine("p", m.t("open selected member profile", "打开当前成员配置"), width),
+		renderActionLine("Mouse", m.t("click a member row to select it", "点击成员行即可选中"), width),
+	}, lines[2:]...)...)
+
+	return lines
 }
 
 func starterSSHProfileDraft(cfg domain.Config, language domain.Language) domain.Profile {
@@ -3103,6 +3481,19 @@ func composeHighlightedLine(prefix, content, query string, width int) string {
 	return prefix + renderHighlightedText(truncateText(content, remaining), query, lipgloss.NewStyle(), filterMatchStyle)
 }
 
+func (m Model) renderStackMemberDetailLine(member app.ProfileView, selected bool, width int) string {
+	style := listRowStyleFor(selected, m.focus == focusStacks && m.inspectorTab == inspectorTabDetails)
+	marker := selectionMarker(selected, m.focus == focusStacks && m.inspectorTab == inspectorTabDetails)
+	contentWidth := max(1, width-style.GetHorizontalFrameSize()-lipgloss.Width(marker))
+	line := composeHighlightedLine(
+		renderStatusBadge(m.language(), member.State.Status)+" ",
+		fmt.Sprintf("%s  %s  %s", member.Profile.Name, profileListPort(member.Profile), profileTarget(m.language(), member.Profile)),
+		m.filterQuery,
+		contentWidth,
+	)
+	return renderSizedBlock(style, width, marker+line)
+}
+
 func clipLines(lines []string, offset, limit int) []string {
 	if len(lines) == 0 || limit <= 0 {
 		return nil
@@ -3219,6 +3610,10 @@ func renderKeyValueLine(label, value string, width int) string {
 }
 
 func renderLogLine(timestamp time.Time, profileName string, source domain.LogSource, message string, query string, width int) string {
+	return renderLogEntryLines(timestamp, profileName, source, message, query, width, false)[0]
+}
+
+func renderLogEntryLines(timestamp time.Time, profileName string, source domain.LogSource, message string, query string, width int, wrap bool) []string {
 	prefixParts := []string{
 		renderHighlightedText(timestamp.Format("15:04:05"), query, logTimestampStyle, filterMatchStyle),
 		renderLogSourceBadge(source, query),
@@ -3229,16 +3624,132 @@ func renderLogLine(timestamp time.Time, profileName string, source domain.LogSou
 
 	prefix := strings.Join(prefixParts, " ")
 	normalized := normalizeLogMessage(message)
+	messageStyle := logMessageStyle(source)
 	if width <= 0 {
-		return prefix + " " + renderHighlightedText(normalized, query, logMessageStyle(source), filterMatchStyle)
+		return []string{prefix + " " + renderHighlightedText(normalized, query, messageStyle, filterMatchStyle)}
 	}
 
 	remaining := width - lipgloss.Width(prefix) - 1
-	if remaining <= 0 {
-		return prefix
+	if !wrap {
+		if remaining <= 0 {
+			return []string{prefix}
+		}
+		return []string{prefix + " " + renderHighlightedText(truncateText(normalized, remaining), query, messageStyle, filterMatchStyle)}
 	}
 
-	return prefix + " " + renderHighlightedText(truncateText(normalized, remaining), query, logMessageStyle(source), filterMatchStyle)
+	if remaining <= 0 {
+		return append([]string{prefix}, renderWrappedLogMessage(normalized, query, messageStyle, filterMatchStyle, width, "")...)
+	}
+
+	chunks := wrapDisplayText(normalized, remaining)
+	if len(chunks) == 0 {
+		return []string{prefix}
+	}
+
+	lines := make([]string, 0, len(chunks))
+	lines = append(lines, prefix+" "+renderHighlightedText(chunks[0], query, messageStyle, filterMatchStyle))
+	if len(chunks) == 1 {
+		return lines
+	}
+
+	continuationPrefix := strings.Repeat(" ", lipgloss.Width(prefix)+1)
+	lines = append(lines, renderWrappedLogMessage(strings.Join(chunks[1:], "\n"), query, messageStyle, filterMatchStyle, width, continuationPrefix)...)
+	return lines
+}
+
+func renderWrappedLogMessage(value, query string, baseStyle, matchStyle lipgloss.Style, width int, prefix string) []string {
+	chunks := wrapDisplayText(strings.ReplaceAll(value, "\n", " "), max(1, width-lipgloss.Width(prefix)))
+	if len(chunks) == 0 {
+		return nil
+	}
+
+	lines := make([]string, 0, len(chunks))
+	for _, chunk := range chunks {
+		lines = append(lines, prefix+renderHighlightedText(chunk, query, baseStyle, matchStyle))
+	}
+	return lines
+}
+
+func wrapDisplayText(value string, width int) []string {
+	if width <= 0 {
+		return []string{value}
+	}
+
+	value = strings.TrimSpace(value)
+	if value == "" {
+		return []string{""}
+	}
+
+	words := strings.Fields(value)
+	lines := make([]string, 0, len(words))
+	current := ""
+	currentWidth := 0
+
+	for _, word := range words {
+		wordWidth := ansi.StringWidth(word)
+		spaceWidth := 0
+		if current != "" {
+			spaceWidth = 1
+		}
+
+		if current != "" && currentWidth+spaceWidth+wordWidth <= width {
+			current += " " + word
+			currentWidth += spaceWidth + wordWidth
+			continue
+		}
+
+		if current != "" {
+			lines = append(lines, current)
+			current = ""
+			currentWidth = 0
+		}
+
+		if wordWidth <= width {
+			current = word
+			currentWidth = wordWidth
+			continue
+		}
+
+		segments := splitDisplayWord(word, width)
+		if len(segments) == 0 {
+			continue
+		}
+		lines = append(lines, segments[:len(segments)-1]...)
+		current = segments[len(segments)-1]
+		currentWidth = ansi.StringWidth(current)
+	}
+
+	if current != "" {
+		lines = append(lines, current)
+	}
+	return lines
+}
+
+func splitDisplayWord(value string, width int) []string {
+	if width <= 0 {
+		return []string{value}
+	}
+
+	runes := []rune(value)
+	segments := make([]string, 0, max(1, len(runes)/width))
+	current := make([]rune, 0, len(runes))
+	currentWidth := 0
+
+	for _, r := range runes {
+		runeWidth := ansi.StringWidth(string(r))
+		if currentWidth+runeWidth > width && len(current) > 0 {
+			segments = append(segments, string(current))
+			current = current[:0]
+			currentWidth = 0
+		}
+		current = append(current, r)
+		currentWidth += runeWidth
+	}
+
+	if len(current) > 0 {
+		segments = append(segments, string(current))
+	}
+	return segments
 }
 
 func renderSizedBlock(style lipgloss.Style, width int, body string) string {
@@ -3461,13 +3972,21 @@ func filterStackViews(views []app.StackView, query string) []app.StackView {
 }
 
 func filterLogEntries(entries []domain.LogEntry, query string) []domain.LogEntry {
+	return filterLogEntriesBySource(entries, query, "")
+}
+
+func filterLogEntriesBySource(entries []domain.LogEntry, query string, sourceFilter domain.LogSource) []domain.LogEntry {
 	query = normalizeFilterQuery(query)
-	if query == "" {
-		return entries
-	}
 
 	filtered := make([]domain.LogEntry, 0, len(entries))
 	for _, entry := range entries {
+		if sourceFilter != "" && entry.Source != sourceFilter {
+			continue
+		}
+		if query == "" {
+			filtered = append(filtered, entry)
+			continue
+		}
 		if !logEntryMatchesFilter("", entry, query) {
 			continue
 		}
@@ -3478,13 +3997,21 @@ func filterLogEntries(entries []domain.LogEntry, query string) []domain.LogEntry
 }
 
 func filterStackActivity(entries []stackActivityEntry, query string) []stackActivityEntry {
+	return filterStackActivityBySource(entries, query, "")
+}
+
+func filterStackActivityBySource(entries []stackActivityEntry, query string, sourceFilter domain.LogSource) []stackActivityEntry {
 	query = normalizeFilterQuery(query)
-	if query == "" {
-		return entries
-	}
 
 	filtered := make([]stackActivityEntry, 0, len(entries))
 	for _, entry := range entries {
+		if sourceFilter != "" && entry.Log.Source != sourceFilter {
+			continue
+		}
+		if query == "" {
+			filtered = append(filtered, entry)
+			continue
+		}
 		if !logEntryMatchesFilter(entry.ProfileName, entry.Log, query) {
 			continue
 		}
@@ -3618,6 +4145,23 @@ func filterMatchRanges(value, query string) []matchRange {
 	}
 
 	return matches
+}
+
+func currentLogMatchPosition(scroll int, starts []int) (int, int) {
+	total := len(starts)
+	if total == 0 {
+		return 0, 0
+	}
+
+	current := 1
+	for idx, start := range starts {
+		if start <= scroll {
+			current = idx + 1
+			continue
+		}
+		break
+	}
+	return current, total
 }
 
 func logSourceMatchesQuery(source domain.LogSource, query string) bool {

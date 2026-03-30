@@ -181,6 +181,9 @@ Inside the TUI:
 - press `s` to seed the sample config when the workspace is empty
 - press `e` to open the guided form editor for the selected profile or stack
 - press `E` to open the raw YAML config in your external editor
+- inside the logs inspector, use `f` to follow/pause, `t` / `T` to cycle sources, `w` to wrap or truncate, and `n` / `N` to jump between filter hits
+- inside stack details, use `[` / `]` to pick a member, `S` to start or stop it, `R` to restart it, and `p` to open that member profile
+- inside the stack form editor, use `+` to add a member below the current row, `Ctrl+X` to remove it, and `[` / `]` to reorder members
 
 ## Key Features
 
@@ -191,11 +194,13 @@ LazyTunnel is designed around a few strong workflows:
 - monitor status, uptime, ports, recent errors, and recent logs in one place
 - group multiple tunnels into a stack and start them together
 - filter profiles and stacks by name, label, target, and port
+- filter logs by text and source, highlight matches, and jump across hits from the logs inspector
 - import draft profiles from `~/.ssh/config` and kubeconfig contexts from the CLI or TUI
 - finish imported drafts in a built-in TUI form editor or from `profile edit --interactive`
 - detect local port conflicts before startup
 - show actionable validation hints that point to the next fix
 - manage config from the CLI with add, clone, edit, and remove commands
+- control individual stack members directly from stack details and reorder members in the guided stack form
 - delete profiles and stacks directly from the TUI with confirmation
 - switch the TUI between English and Simplified Chinese instantly
 

@@ -96,7 +96,28 @@ const (
 	editorFieldResourceType   = "resource_type"
 	editorFieldResource       = "resource"
 	editorFieldProfiles       = "profiles"
+	editorFieldStackMemberKey = "stack_member_"
 )
+
+func stackMemberFieldKey(index int) string {
+	return fmt.Sprintf("%s%d", editorFieldStackMemberKey, index)
+}
+
+func isStackMemberFieldKey(key string) bool {
+	return strings.HasPrefix(key, editorFieldStackMemberKey)
+}
+
+func stackMemberFieldIndex(key string) (int, bool) {
+	if !isStackMemberFieldKey(key) {
+		return 0, false
+	}
+
+	index, err := strconv.Atoi(strings.TrimPrefix(key, editorFieldStackMemberKey))
+	if err != nil {
+		return 0, false
+	}
+	return index, true
+}
 
 func newProfileEditorState(profile domain.Profile, originName string, language domain.Language) *formEditorState {
 	profile = domain.PrepareProfileForType(profile, editableTunnelType(profile.Type))
@@ -155,18 +176,18 @@ func newStackEditorState(stack domain.Stack, originName string, language domain.
 		editorFieldName:        stack.Name,
 		editorFieldDescription: stack.Description,
 		editorFieldLabels:      strings.Join(stack.Labels, ", "),
-		editorFieldProfiles:    strings.Join(stack.Profiles, ", "),
 	}
 
 	editor := &formEditorState{
 		kind:       formEditorStack,
 		originName: originName,
 		values:     values,
-		cursors:    make(map[string]int, len(values)),
+		cursors:    make(map[string]int, len(values)+len(stack.Profiles)),
 	}
 	for key, value := range values {
 		editor.cursors[key] = runeLen(value)
 	}
+	editor.setStackMembersWithCursors(stack.Profiles, nil)
 	editor.rebuild(language)
 	return editor
 }
@@ -194,38 +215,7 @@ func (e *formEditorState) rebuild(language domain.Language) {
 
 	switch e.kind {
 	case formEditorStack:
-		e.fields = []formField{
-			{
-				key:         editorFieldName,
-				label:       translate(language, "Name", "名称"),
-				help:        translate(language, "The stack name shown in the TUI and CLI.", "这个组合在 TUI 和 CLI 里的名字。"),
-				placeholder: translate(language, "backend-dev", "backend-dev"),
-				required:    true,
-				kind:        formFieldText,
-			},
-			{
-				key:         editorFieldDescription,
-				label:       translate(language, "Description", "说明"),
-				help:        translate(language, "Optional context so you remember what this stack is for.", "可选说明，帮助你记住这个组合是做什么的。"),
-				placeholder: translate(language, "Daily backend stack", "日常后端组合"),
-				kind:        formFieldText,
-			},
-			{
-				key:         editorFieldLabels,
-				label:       translate(language, "Labels", "标签"),
-				help:        translate(language, "Comma-separated labels. Remove draft here when this stack is ready.", "逗号分隔的标签。组合准备好后，也可以在这里去掉 draft。"),
-				placeholder: translate(language, "dev, api", "dev, api"),
-				kind:        formFieldList,
-			},
-			{
-				key:         editorFieldProfiles,
-				label:       translate(language, "Profiles", "成员配置"),
-				help:        translate(language, "Comma-separated profile names in start order.", "按启动顺序填写，使用逗号分隔 profile 名。"),
-				placeholder: translate(language, "prod-db, api-debug", "prod-db, api-debug"),
-				required:    true,
-				kind:        formFieldList,
-			},
-		}
+		e.fields = e.stackFields(language)
 	default:
 		profile := domain.PrepareProfileForType(e.profileDraft(), editableTunnelType(domain.TunnelType(strings.TrimSpace(e.values[editorFieldType]))))
 		e.ensureProfileDefaults(profile)
@@ -240,6 +230,49 @@ func (e *formEditorState) rebuild(language domain.Language) {
 	for _, field := range e.fields {
 		e.cursors[field.key] = min(max(e.cursors[field.key], 0), runeLen(e.values[field.key]))
 	}
+}
+
+func (e *formEditorState) stackFields(language domain.Language) []formField {
+	members, cursors := e.stackMemberSnapshot()
+	e.setStackMembersWithCursors(members, cursors)
+
+	fields := []formField{
+		{
+			key:         editorFieldName,
+			label:       translate(language, "Name", "名称"),
+			help:        translate(language, "The stack name shown in the TUI and CLI.", "这个组合在 TUI 和 CLI 里的名字。"),
+			placeholder: translate(language, "backend-dev", "backend-dev"),
+			required:    true,
+			kind:        formFieldText,
+		},
+		{
+			key:         editorFieldDescription,
+			label:       translate(language, "Description", "说明"),
+			help:        translate(language, "Optional context so you remember what this stack is for.", "可选说明，帮助你记住这个组合是做什么的。"),
+			placeholder: translate(language, "Daily backend stack", "日常后端组合"),
+			kind:        formFieldText,
+		},
+		{
+			key:         editorFieldLabels,
+			label:       translate(language, "Labels", "标签"),
+			help:        translate(language, "Comma-separated labels. Remove draft here when this stack is ready.", "逗号分隔的标签。组合准备好后，也可以在这里去掉 draft。"),
+			placeholder: translate(language, "dev, api", "dev, api"),
+			kind:        formFieldList,
+		},
+	}
+
+	for idx := range members {
+		fields = append(fields, formField{
+			key:         stackMemberFieldKey(idx),
+			label:       translatef(language, "Member %d", "成员 %d", idx+1),
+			help:        translate(language, "Profile name in start order. + adds below, Ctrl+X removes, and [ or ] reorders.", "按启动顺序填写成员 profile 名。+ 在下方新增，Ctrl+X 删除，[ 或 ] 调整顺序。"),
+			placeholder: translate(language, "prod-db", "prod-db"),
+			required:    true,
+			kind:        formFieldText,
+		})
+	}
+
+	return fields
 }
 
 func (e *formEditorState) ensureProfileDefaults(profile domain.Profile) {
@@ -658,6 +691,174 @@ func (e *formEditorState) moveCursorToEnd(key string) {
 	e.cursors[key] = runeLen(e.values[key])
 }
 
+func (e *formEditorState) stackMemberFieldKeys() []string {
+	if e == nil {
+		return nil
+	}
+
+	keys := make([]string, 0)
+	for idx := 0; ; idx++ {
+		key := stackMemberFieldKey(idx)
+		if _, exists := e.values[key]; !exists {
+			break
+		}
+		keys = append(keys, key)
+	}
+	if len(keys) > 0 {
+		return keys
+	}
+
+	for _, field := range e.fields {
+		if isStackMemberFieldKey(field.key) {
+			keys = append(keys, field.key)
+		}
+	}
+	return keys
+}
+
+func (e *formEditorState) stackMemberSnapshot() ([]string, []int) {
+	keys := e.stackMemberFieldKeys()
+	if len(keys) == 0 {
+		legacy := parseEditorList(e.values[editorFieldProfiles])
+		if len(legacy) == 0 {
+			legacy = []string{""}
+		}
+		cursors := make([]int, len(legacy))
+		for idx, value := range legacy {
+			cursors[idx] = runeLen(value)
+		}
+		return legacy, cursors
+	}
+
+	members := make([]string, 0, len(keys))
+	cursors := make([]int, 0, len(keys))
+	for _, key := range keys {
+		value := e.values[key]
+		members = append(members, value)
+		cursors = append(cursors, min(max(e.cursors[key], 0), runeLen(value)))
+	}
+	if len(members) == 0 {
+		return []string{""}, []int{0}
+	}
+	return members, cursors
+}
+
+func (e *formEditorState) setStackMembersWithCursors(members []string, cursors []int) {
+	if e == nil {
+		return
+	}
+	if len(members) == 0 {
+		members = []string{""}
+	}
+
+	for key := range e.values {
+		if key == editorFieldProfiles || isStackMemberFieldKey(key) {
+			delete(e.values, key)
+		}
+	}
+	for key := range e.cursors {
+		if key == editorFieldProfiles || isStackMemberFieldKey(key) {
+			delete(e.cursors, key)
+		}
+	}
+
+	for idx, member := range members {
+		key := stackMemberFieldKey(idx)
+		e.values[key] = member
+		cursor := runeLen(member)
+		if idx < len(cursors) {
+			cursor = min(max(cursors[idx], 0), runeLen(member))
+		}
+		e.cursors[key] = cursor
+	}
+}
+
+func (e *formEditorState) focusFieldByKey(key string) {
+	for idx, field := range e.fields {
+		if field.key == key {
+			e.focus = idx
+			return
+		}
+	}
+}
+
+func (e *formEditorState) currentStackMemberIndex() (int, bool) {
+	field, ok := e.currentField()
+	if !ok {
+		return 0, false
+	}
+	return stackMemberFieldIndex(field.key)
+}
+
+func (e *formEditorState) addStackMember(language domain.Language) {
+	members, cursors := e.stackMemberSnapshot()
+	insertAt := len(members)
+	if index, ok := e.currentStackMemberIndex(); ok {
+		insertAt = index + 1
+	}
+
+	members = append(members, "")
+	cursors = append(cursors, 0)
+	copy(members[insertAt+1:], members[insertAt:])
+	copy(cursors[insertAt+1:], cursors[insertAt:])
+	members[insertAt] = ""
+	cursors[insertAt] = 0
+
+	e.setStackMembersWithCursors(members, cursors)
+	e.rebuild(language)
+	e.focusFieldByKey(stackMemberFieldKey(insertAt))
+}
+
+func (e *formEditorState) removeCurrentStackMember(language domain.Language) {
+	index, ok := e.currentStackMemberIndex()
+	if !ok {
+		return
+	}
+
+	members, cursors := e.stackMemberSnapshot()
+	if len(members) <= 1 {
+		e.setStackMembersWithCursors([]string{""}, []int{0})
+		e.rebuild(language)
+		e.focusFieldByKey(stackMemberFieldKey(0))
+		return
+	}
+
+	members = append(members[:index], members[index+1:]...)
+	cursors = append(cursors[:index], cursors[index+1:]...)
+	e.setStackMembersWithCursors(members, cursors)
+	e.rebuild(language)
+	e.focusFieldByKey(stackMemberFieldKey(min(index, len(members)-1)))
+}
+
+func (e *formEditorState) moveCurrentStackMember(language domain.Language, delta int) {
+	index, ok := e.currentStackMemberIndex()
+	if !ok {
+		return
+	}
+
+	members, cursors := e.stackMemberSnapshot()
+	target := min(max(index+delta, 0), len(members)-1)
+	if target == index {
+		return
+	}
+
+	member := members[index]
+	cursor := cursors[index]
+	if target > index {
+		copy(members[index:], members[index+1:target+1])
+		copy(cursors[index:], cursors[index+1:target+1])
+	} else {
+		copy(members[target+1:], members[target:index])
+		copy(cursors[target+1:], cursors[target:index])
+	}
+	members[target] = member
+	cursors[target] = cursor
+
+	e.setStackMembersWithCursors(members, cursors)
+	e.rebuild(language)
+	e.focusFieldByKey(stackMemberFieldKey(target))
+}
+
 func runeLen(value string) int {
 	return len([]rune(value))
 }
@@ -752,6 +953,13 @@ func (m Model) editorTitle() string {
 }
 
 func (m Model) editorInstructionLine() string {
+	if m.editor != nil && m.editor.kind == formEditorStack {
+		return m.t(
+			"Up/Down or Tab move • type to edit • [ ] reorder member • + add member • Ctrl+X remove • Enter/Ctrl+S save • Esc cancel • E YAML",
+			"上下或 Tab 移动 • 直接输入即可编辑 • [ ] 调整成员顺序 • + 新增成员 • Ctrl+X 删除 • Enter/Ctrl+S 保存 • Esc 取消 • E 打开 YAML",
+		)
+	}
+
 	return m.t(
 		"Up/Down or Tab move • type to edit • Left/Right moves or switches • Enter/Ctrl+S save • Esc cancel • E YAML",
 		"上下或 Tab 移动 • 直接输入即可编辑 • 左右移动或切换 • Enter/Ctrl+S 保存 • Esc 取消 • E 打开 YAML",
@@ -858,6 +1066,25 @@ func (m Model) handleEditorKey(msg tea.KeyMsg) (Model, tea.Cmd, bool) {
 	field, ok := m.editor.currentField()
 	if !ok {
 		return m, nil, false
+	}
+
+	if m.editor.kind == formEditorStack {
+		if _, isMemberField := m.editor.currentStackMemberIndex(); isMemberField {
+			switch msg.String() {
+			case "+":
+				m.editor.addStackMember(m.language())
+				return m, nil, true
+			case "ctrl+x":
+				m.editor.removeCurrentStackMember(m.language())
+				return m, nil, true
+			case "[":
+				m.editor.moveCurrentStackMember(m.language(), -1)
+				return m, nil, true
+			case "]":
+				m.editor.moveCurrentStackMember(m.language(), 1)
+				return m, nil, true
+			}
+		}
 	}
 
 	switch msg.String() {
@@ -1166,11 +1393,21 @@ func (e *formEditorState) profileFromValues(strict bool) (domain.Profile, error)
 }
 
 func (e *formEditorState) stackFromValues(strict bool) (domain.Stack, error) {
+	members, _ := e.stackMemberSnapshot()
+	profiles := make([]string, 0, len(members))
+	for _, member := range members {
+		member = strings.TrimSpace(member)
+		if member == "" {
+			continue
+		}
+		profiles = append(profiles, member)
+	}
+
 	stack := domain.Stack{
 		Name:        strings.TrimSpace(e.values[editorFieldName]),
 		Description: strings.TrimSpace(e.values[editorFieldDescription]),
 		Labels:      parseEditorList(e.values[editorFieldLabels]),
-		Profiles:    parseEditorList(e.values[editorFieldProfiles]),
+		Profiles:    profiles,
 	}
 
 	if strict {
@@ -1180,7 +1417,7 @@ func (e *formEditorState) stackFromValues(strict bool) (domain.Stack, error) {
 			return domain.Stack{}, fmt.Errorf("name is required")
 		}
 		if len(stack.Profiles) == 0 {
-			return domain.Stack{}, fmt.Errorf("profiles must include at least one profile name")
+			return domain.Stack{}, fmt.Errorf("members must include at least one profile name")
 		}
 	}
 

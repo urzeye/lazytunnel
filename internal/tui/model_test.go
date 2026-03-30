@@ -508,6 +508,47 @@ func TestRenderProfileLogLinesIncludeSummaryAndFilterState(t *testing.T) {
 	}
 }
 
+func TestRenderProfileLogContentAppliesSourceFilterAndWrap(t *testing.T) {
+	t.Parallel()
+
+	view := app.ProfileView{
+		State: domain.RuntimeState{
+			RecentLogs: []domain.LogEntry{
+				{
+					Timestamp: time.Date(2026, 3, 30, 10, 0, 0, 0, time.UTC),
+					Source:    domain.LogSourceStdout,
+					Message:   "stdout ready",
+				},
+				{
+					Timestamp: time.Date(2026, 3, 30, 10, 0, 1, 0, time.UTC),
+					Source:    domain.LogSourceStderr,
+					Message:   "dial tcp timeout while waiting for the upstream server to finish booting",
+				},
+			},
+		},
+	}
+
+	model := Model{
+		logSourceFilter: domain.LogSourceStderr,
+		logWrap:         true,
+	}
+	content := model.renderProfileLogContent(view, 44)
+	rendered := strings.Join(content.lines, "\n")
+
+	if strings.Contains(rendered, "stdout ready") {
+		t.Fatalf("expected stdout log to be filtered out, got %q", rendered)
+	}
+	if !strings.Contains(rendered, "dial tcp timeout") {
+		t.Fatalf("expected stderr log to remain visible, got %q", rendered)
+	}
+	if len(content.logHitStarts) != 1 {
+		t.Fatalf("expected source-filtered content to expose one match hit, got %#v", content.logHitStarts)
+	}
+	if len(content.lines) <= 4 {
+		t.Fatalf("expected wrapped content to use multiple lines, got %#v", content.lines)
+	}
+}
+
 func TestRenderStackLogLinesIncludeProfileCoverageSummary(t *testing.T) {
 	t.Parallel()
 
@@ -978,6 +1019,82 @@ func TestHandleInspectorKeyHomeAndEndNavigateLogs(t *testing.T) {
 	}
 	if next.inspectorScroll <= 0 {
 		t.Fatalf("expected end to jump away from latest logs, got scroll=%d", next.inspectorScroll)
+	}
+}
+
+func TestHandleInspectorKeyManagesLogFollowPauseAndSourceFilter(t *testing.T) {
+	t.Parallel()
+
+	logs := []domain.LogEntry{
+		{Timestamp: time.Date(2026, 3, 30, 10, 0, 0, 0, time.UTC), Source: domain.LogSourceStdout, Message: "server ready"},
+		{Timestamp: time.Date(2026, 3, 30, 10, 0, 1, 0, time.UTC), Source: domain.LogSourceStderr, Message: "dial tcp timeout"},
+		{Timestamp: time.Date(2026, 3, 30, 10, 0, 2, 0, time.UTC), Source: domain.LogSourceStdout, Message: "health ok"},
+		{Timestamp: time.Date(2026, 3, 30, 10, 0, 3, 0, time.UTC), Source: domain.LogSourceStderr, Message: "timeout waiting for upstream"},
+	}
+
+	runtime := newStubRuntimeController()
+	runtime.states["prod-db"] = domain.RuntimeState{
+		ProfileName: "prod-db",
+		Status:      domain.TunnelStatusRunning,
+		RecentLogs:  logs,
+	}
+
+	cfg := domain.Config{
+		Version: domain.CurrentConfigVersion,
+		Profiles: []domain.Profile{
+			{
+				Name:      "prod-db",
+				Type:      domain.TunnelTypeSSHLocal,
+				LocalPort: 15432,
+				SSH: &domain.SSHLocal{
+					Host:       "bastion-prod",
+					RemoteHost: "db.internal",
+					RemotePort: 5432,
+				},
+			},
+		},
+	}
+
+	service, err := app.NewService(cfg, runtime)
+	if err != nil {
+		t.Fatalf("new service: %v", err)
+	}
+
+	model := Model{
+		service:        service,
+		width:          140,
+		height:         30,
+		inspectorTab:   inspectorTabLogs,
+		logFilterQuery: "timeout",
+	}
+	profiles := filterProfileViews(service.ProfileViews(), "")
+	stacks := filterStackViews(service.StackViews(), "")
+
+	next, handled := model.handleInspectorKey(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'n'}}, profiles, stacks)
+	if !handled {
+		t.Fatal("expected n to navigate log matches")
+	}
+	if next.inspectorScroll == 0 {
+		t.Fatalf("expected next-match navigation to move below the summary, got %d", next.inspectorScroll)
+	}
+	if !next.logFollowPaused {
+		t.Fatal("expected next-match navigation to pause follow mode")
+	}
+
+	next, handled = next.handleInspectorKey(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'f'}}, profiles, stacks)
+	if !handled {
+		t.Fatal("expected f to toggle follow mode")
+	}
+	if next.logFollowPaused || next.inspectorScroll != 0 {
+		t.Fatalf("expected follow resume to reset scroll, got paused=%v scroll=%d", next.logFollowPaused, next.inspectorScroll)
+	}
+
+	next, handled = next.handleInspectorKey(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'t'}}, profiles, stacks)
+	if !handled {
+		t.Fatal("expected t to cycle log source filter")
+	}
+	if next.logSourceFilter != domain.LogSourceSystem {
+		t.Fatalf("expected first source cycle to choose system logs, got %q", next.logSourceFilter)
 	}
 }
 
@@ -1490,8 +1607,8 @@ func TestHintMessageMentionsLogFilteringWhenLogsTabActive(t *testing.T) {
 	if !strings.Contains(got, "/ filter logs") {
 		t.Fatalf("expected logs filter hint, got %q", got)
 	}
-	if !strings.Contains(got, "Home latest End oldest") {
-		t.Fatalf("expected log navigation hint, got %q", got)
+	if !strings.Contains(got, "f follow/pause") || !strings.Contains(got, "n/N hits") {
+		t.Fatalf("expected expanded log navigation hints, got %q", got)
 	}
 }
 
@@ -1728,6 +1845,58 @@ func TestSaveProfileEditorPersistsUpdatedFields(t *testing.T) {
 	}
 }
 
+func TestStackEditorSupportsDynamicMemberAddMoveRemoveAndSaveOrder(t *testing.T) {
+	t.Parallel()
+
+	model := Model{
+		editor: newStackEditorState(domain.Stack{
+			Name:     "backend-dev",
+			Profiles: []string{"prod-db", "api-debug"},
+		}, "backend-dev", domain.LanguageEnglish),
+	}
+	model.editor.focusFieldByKey(stackMemberFieldKey(0))
+
+	next, _, handled := model.handleEditorKey(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{']'}})
+	if !handled {
+		t.Fatal("expected ] to reorder stack members")
+	}
+	members, _ := next.editor.stackMemberSnapshot()
+	if got := strings.Join(members, ","); got != "api-debug,prod-db" {
+		t.Fatalf("expected reordered members api-debug,prod-db, got %q", got)
+	}
+
+	next, _, handled = next.handleEditorKey(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'+'}})
+	if !handled {
+		t.Fatal("expected + to add a stack member field")
+	}
+	members, _ = next.editor.stackMemberSnapshot()
+	if len(members) != 3 || members[2] != "" {
+		t.Fatalf("expected a blank member field to be added, got %#v", members)
+	}
+
+	next.editor.setValue(stackMemberFieldKey(2), "worker-debug")
+	next, _, handled = next.handleEditorKey(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'['}})
+	if !handled {
+		t.Fatal("expected [ to move the new member upward")
+	}
+	stack, err := next.editor.stackFromValues(true)
+	if err != nil {
+		t.Fatalf("expected stack editor values to remain valid, got %v", err)
+	}
+	if got := strings.Join(stack.Profiles, ","); got != "api-debug,worker-debug,prod-db" {
+		t.Fatalf("expected saved member order api-debug,worker-debug,prod-db, got %q", got)
+	}
+
+	next, _, handled = next.handleEditorKey(tea.KeyMsg{Type: tea.KeyCtrlX})
+	if !handled {
+		t.Fatal("expected Ctrl+X to remove the selected member")
+	}
+	members, _ = next.editor.stackMemberSnapshot()
+	if got := strings.Join(members, ","); got != "api-debug,prod-db" {
+		t.Fatalf("expected removed member list api-debug,prod-db, got %q", got)
+	}
+}
+
 func TestHandleWorkspaceKeyUsesPToOpenSelectedStackMember(t *testing.T) {
 	t.Parallel()
 
@@ -1762,6 +1931,89 @@ func TestHandleWorkspaceKeyUsesPToOpenSelectedStackMember(t *testing.T) {
 	}
 	if !strings.Contains(next.lastNotice, "Opened member profile prod-db from stack backend-dev.") {
 		t.Fatalf("expected open-member notice, got %q", next.lastNotice)
+	}
+}
+
+func TestHandleWorkspaceKeyUsesPToOpenCurrentlySelectedStackMember(t *testing.T) {
+	t.Parallel()
+
+	service, err := app.NewService(storage.SampleConfig(), newStubRuntimeController())
+	if err != nil {
+		t.Fatalf("new service: %v", err)
+	}
+
+	model := Model{
+		service:             service,
+		focus:               focusStacks,
+		selectedStack:       0,
+		selectedStackMember: 1,
+		inspectorTab:        inspectorTabDetails,
+	}
+
+	profiles := filterProfileViews(service.ProfileViews(), "")
+	stacks := filterStackViews(service.StackViews(), "")
+	next, _, handled := model.handleWorkspaceKey(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'p'}}, profiles, stacks)
+	if !handled {
+		t.Fatal("expected p key to be handled for the selected stack member")
+	}
+	if got := next.service.ProfileViews()[next.selectedProfile].Profile.Name; got != "api-debug" {
+		t.Fatalf("expected selected member api-debug to be opened, got %q", got)
+	}
+	if !strings.Contains(next.lastNotice, "Opened member profile api-debug from stack backend-dev.") {
+		t.Fatalf("expected selected-member notice, got %q", next.lastNotice)
+	}
+}
+
+func TestHandleInspectorKeyControlsSelectedStackMember(t *testing.T) {
+	t.Parallel()
+
+	runtime := newStubRuntimeController()
+	runtime.states["api-debug"] = domain.RuntimeState{
+		ProfileName: "api-debug",
+		Status:      domain.TunnelStatusRunning,
+		PID:         42,
+	}
+
+	service, err := app.NewService(storage.SampleConfig(), runtime, app.WithPortChecker(stubPortChecker{}))
+	if err != nil {
+		t.Fatalf("new service: %v", err)
+	}
+
+	model := Model{
+		service:             service,
+		focus:               focusStacks,
+		selectedStack:       0,
+		selectedStackMember: 1,
+		inspectorTab:        inspectorTabDetails,
+		width:               140,
+		height:              30,
+	}
+
+	profiles := filterProfileViews(service.ProfileViews(), "")
+	stacks := filterStackViews(service.StackViews(), "")
+
+	next, handled := model.handleInspectorKey(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'S'}}, profiles, stacks)
+	if !handled {
+		t.Fatal("expected S to toggle the selected stack member")
+	}
+	if len(runtime.stoppedNames) == 0 || runtime.stoppedNames[len(runtime.stoppedNames)-1] != "api-debug" {
+		t.Fatalf("expected api-debug to be stopped, got %#v", runtime.stoppedNames)
+	}
+	if !strings.Contains(next.lastNotice, "api-debug") {
+		t.Fatalf("expected member toggle notice to mention api-debug, got %q", next.lastNotice)
+	}
+
+	profiles = filterProfileViews(service.ProfileViews(), "")
+	stacks = filterStackViews(service.StackViews(), "")
+	next, handled = next.handleInspectorKey(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'R'}}, profiles, stacks)
+	if !handled {
+		t.Fatal("expected R to restart the selected stack member")
+	}
+	if state, ok := runtime.states["api-debug"]; !ok || state.Status != domain.TunnelStatusRunning {
+		t.Fatalf("expected api-debug to be running after restart, got %#v", state)
+	}
+	if !strings.Contains(next.lastNotice, "Restarted member api-debug in stack backend-dev.") {
+		t.Fatalf("expected restart notice for selected member, got %q", next.lastNotice)
 	}
 }
 
@@ -2019,7 +2271,7 @@ func TestHandleMouseClickTriggersImportPromptAction(t *testing.T) {
 	}
 }
 
-func TestHandleMouseClickOnStackMemberFocusesProfile(t *testing.T) {
+func TestHandleMouseClickOnStackMemberSelectsMember(t *testing.T) {
 	t.Parallel()
 
 	service, err := app.NewService(storage.SampleConfig(), newStubRuntimeController())
@@ -2039,13 +2291,13 @@ func TestHandleMouseClickOnStackMemberFocusesProfile(t *testing.T) {
 	stacks := filterStackViews(service.StackViews(), "")
 	layout := model.mouseLayout(profiles, stacks)
 
-	if len(layout.stackMembers) == 0 {
+	if len(layout.stackMembers) < 2 {
 		t.Fatal("expected stack member rows to be clickable")
 	}
 
 	msg := tea.MouseMsg{
-		X:      layout.stackMembers[0].rect.x + 1,
-		Y:      layout.stackMembers[0].rect.y,
+		X:      layout.stackMembers[1].rect.x + 1,
+		Y:      layout.stackMembers[1].rect.y,
 		Action: tea.MouseActionPress,
 		Button: tea.MouseButtonLeft,
 	}
@@ -2053,11 +2305,11 @@ func TestHandleMouseClickOnStackMemberFocusesProfile(t *testing.T) {
 	if !handled {
 		t.Fatal("expected stack member click to be handled")
 	}
-	if next.focus != focusProfiles {
-		t.Fatalf("expected member click to switch focus to profiles, got %v", next.focus)
+	if next.focus != focusStacks {
+		t.Fatalf("expected member click to keep stack focus, got %v", next.focus)
 	}
-	if got := next.service.ProfileViews()[next.selectedProfile].Profile.Name; got != "prod-db" {
-		t.Fatalf("expected clicked member prod-db to be focused, got %q", got)
+	if next.selectedStackMember != 1 {
+		t.Fatalf("expected clicked member index 1 to be selected, got %d", next.selectedStackMember)
 	}
 }
 
