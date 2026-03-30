@@ -103,7 +103,7 @@ func TestRenderProfileDetailLinesShowsConfigProblem(t *testing.T) {
 				},
 			},
 		},
-	}, newStubRuntimeController())
+	}, newStubRuntimeController(), app.WithPortChecker(stubPortChecker{}))
 	if err != nil {
 		t.Fatalf("new service: %v", err)
 	}
@@ -156,7 +156,7 @@ func TestRenderStackDetailLinesShowsMissingProfiles(t *testing.T) {
 				Profiles: []string{"prod-db", "missing-api"},
 			},
 		},
-	}, newStubRuntimeController())
+	}, newStubRuntimeController(), app.WithPortChecker(stubPortChecker{}))
 	if err != nil {
 		t.Fatalf("new service: %v", err)
 	}
@@ -1901,6 +1901,92 @@ func TestHandleWorkspaceKeyUsesEForFormEditor(t *testing.T) {
 	}
 }
 
+func TestCreateStarterProfileDraftFocusesRecommendedField(t *testing.T) {
+	t.Parallel()
+
+	configPath := filepath.Join(t.TempDir(), "config.yaml")
+	service, err := app.NewService(domain.DefaultConfig(), newStubRuntimeController())
+	if err != nil {
+		t.Fatalf("new service: %v", err)
+	}
+
+	model := Model{
+		service:    service,
+		configPath: configPath,
+	}
+	model = model.createStarterProfileDraft()
+
+	field, ok := model.editor.currentField()
+	if !ok {
+		t.Fatal("expected active editor field")
+	}
+	if field.key != editorFieldHost {
+		t.Fatalf("expected starter draft to focus SSH Host, got %q", field.key)
+	}
+	if guide := model.editorGuideLine(); !strings.Contains(guide, "SSH Host") {
+		t.Fatalf("expected guide line to mention SSH Host, got %q", guide)
+	}
+}
+
+func TestBeginProfileEditorGuidesImportedKubernetesDraftToResource(t *testing.T) {
+	t.Parallel()
+
+	model := Model{}
+	model = model.beginProfileEditor(domain.Profile{
+		Name:      "dev-cluster",
+		Type:      domain.TunnelTypeKubernetesPortForward,
+		LocalPort: 18080,
+		Labels:    []string{"draft", "imported", "kube-context"},
+		Kubernetes: &domain.Kubernetes{
+			Context:      "dev-cluster",
+			Namespace:    "backend",
+			ResourceType: "service",
+			Resource:     "change-me",
+			RemotePort:   80,
+		},
+	}, "dev-cluster")
+
+	field, ok := model.editor.currentField()
+	if !ok {
+		t.Fatal("expected active editor field")
+	}
+	if field.key != editorFieldResource {
+		t.Fatalf("expected imported kube draft to focus Resource, got %q", field.key)
+	}
+	if guide := model.editorGuideLine(); !strings.Contains(guide, "Resource") {
+		t.Fatalf("expected guide line to mention Resource, got %q", guide)
+	}
+}
+
+func TestCreateStarterStackDraftFocusesFirstMemberField(t *testing.T) {
+	t.Parallel()
+
+	configPath := filepath.Join(t.TempDir(), "config.yaml")
+	service, err := app.NewService(storage.SampleConfig(), newStubRuntimeController())
+	if err != nil {
+		t.Fatalf("new service: %v", err)
+	}
+
+	model := Model{
+		service:    service,
+		configPath: configPath,
+	}
+	profiles := filterProfileViews(service.ProfileViews(), "")
+	stacks := filterStackViews(service.StackViews(), "")
+	model = model.createStarterStackDraft(profiles, stacks)
+
+	field, ok := model.editor.currentField()
+	if !ok {
+		t.Fatal("expected active editor field")
+	}
+	if field.key != stackMemberFieldKey(0) {
+		t.Fatalf("expected starter stack draft to focus first member, got %q", field.key)
+	}
+	if guide := model.editorGuideLine(); !strings.Contains(guide, "Member 1") {
+		t.Fatalf("expected guide line to mention Member 1, got %q", guide)
+	}
+}
+
 func TestSaveProfileEditorPersistsUpdatedFields(t *testing.T) {
 	t.Parallel()
 
@@ -1989,6 +2075,81 @@ func TestStackEditorSupportsDynamicMemberAddMoveRemoveAndSaveOrder(t *testing.T)
 	members, _ = next.editor.stackMemberSnapshot()
 	if got := strings.Join(members, ","); got != "api-debug,prod-db" {
 		t.Fatalf("expected removed member list api-debug,prod-db, got %q", got)
+	}
+}
+
+func TestSaveStackEditorDedupesMembersAndReportsIt(t *testing.T) {
+	t.Parallel()
+
+	configPath := filepath.Join(t.TempDir(), "config.yaml")
+	service, err := app.NewService(storage.SampleConfig(), newStubRuntimeController())
+	if err != nil {
+		t.Fatalf("new service: %v", err)
+	}
+
+	model := Model{
+		service:    service,
+		configPath: configPath,
+		editor: newStackEditorState(domain.Stack{
+			Name:     "backend-dev",
+			Labels:   []string{"draft"},
+			Profiles: []string{"prod-db", "api-debug", "prod-db"},
+		}, "backend-dev", domain.LanguageEnglish),
+	}
+
+	model = model.saveActiveEditor()
+
+	if model.lastError != "" {
+		t.Fatalf("expected no save error, got %q", model.lastError)
+	}
+	if !strings.Contains(model.lastNotice, "removed 1 duplicate member entries") {
+		t.Fatalf("expected duplicate-removal notice, got %q", model.lastNotice)
+	}
+
+	cfg, err := storage.LoadConfig(configPath)
+	if err != nil {
+		t.Fatalf("load config: %v", err)
+	}
+	var saved domain.Stack
+	found := false
+	for _, stack := range cfg.Stacks {
+		if stack.Name == "backend-dev" {
+			saved = stack
+			found = true
+			break
+		}
+	}
+	if !found {
+		t.Fatal("expected saved stack backend-dev")
+	}
+	if got := strings.Join(saved.Profiles, ","); got != "prod-db,api-debug" {
+		t.Fatalf("expected deduped members prod-db,api-debug, got %q", got)
+	}
+}
+
+func TestEditorHelpLineShowsAvailableProfilesForStackMembers(t *testing.T) {
+	t.Parallel()
+
+	service, err := app.NewService(storage.SampleConfig(), newStubRuntimeController())
+	if err != nil {
+		t.Fatalf("new service: %v", err)
+	}
+
+	model := Model{
+		service: service,
+		editor: newStackEditorState(domain.Stack{
+			Name:     "draft-stack",
+			Labels:   []string{"draft"},
+			Profiles: []string{"prod-db"},
+		}, "draft-stack", domain.LanguageEnglish),
+	}
+
+	help := model.editorHelpLine()
+	if !strings.Contains(help, "Available profiles:") {
+		t.Fatalf("expected available-profile hint, got %q", help)
+	}
+	if !strings.Contains(help, "prod-db") || !strings.Contains(help, "api-debug") {
+		t.Fatalf("expected available profile names in help, got %q", help)
 	}
 }
 

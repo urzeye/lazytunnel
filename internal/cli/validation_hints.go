@@ -74,12 +74,36 @@ func collectProfileValidationHints(profileName string, profile domain.Profile, p
 			appendHint("set --resource-type to pod, service, or deployment")
 		case strings.Contains(problem, "resource is required"):
 			appendHint("set --resource <name> or use --interactive to fill Resource")
+		case strings.Contains(problem, `resource "change-me" is still a placeholder`):
+			appendHint("set --resource to the real Kubernetes target before starting this profile")
 		case strings.Contains(problem, "max_retries must be greater than or equal to 0"):
 			appendHint("set --max-retries to 0 or a positive integer")
 		case strings.Contains(problem, "invalid initial_backoff"):
 			appendHint("set --initial-backoff to a valid duration like 2s or 500ms")
 		case strings.Contains(problem, "invalid max_backoff"):
 			appendHint("set --max-backoff to a valid duration like 30s or 5m")
+		case strings.Contains(problem, "SSH host alias") && strings.Contains(problem, "was not found"):
+			appendHint("set --host to a real hostname, or import / restore the missing SSH alias in ~/.ssh/config")
+		case strings.Contains(problem, "could not verify SSH host alias"):
+			appendHint("check ~/.ssh/config readability, or set --host to a direct hostname instead of relying on an alias")
+		case strings.Contains(problem, "kubernetes context") && strings.Contains(problem, "was not found"):
+			appendHint("set --context to an existing kube context, or import kube contexts again and pick a valid one")
+		case strings.Contains(problem, "could not verify Kubernetes context information"):
+			appendHint("check KUBECONFIG / ~/.kube/config, or set --context explicitly after fixing local kube config access")
+		case strings.Contains(problem, "kubernetes namespace") && strings.Contains(problem, "was not found"):
+			appendHint("set --namespace to an existing namespace, or leave it blank intentionally to use the context default")
+		case strings.Contains(problem, "could not verify kubernetes namespace"):
+			appendHint("check kubectl access for this context, or retry after connecting to the cluster")
+		case strings.Contains(problem, "kubernetes service") && strings.Contains(problem, "was not found"):
+			appendHint("set --resource to an existing service name in the target namespace")
+		case strings.Contains(problem, "kubernetes pod") && strings.Contains(problem, "was not found"):
+			appendHint("set --resource to an existing pod name in the target namespace")
+		case strings.Contains(problem, "kubernetes deployment") && strings.Contains(problem, "was not found"):
+			appendHint("set --resource to an existing deployment name in the target namespace")
+		case strings.Contains(problem, "could not verify kubernetes service") || strings.Contains(problem, "could not verify kubernetes pod") || strings.Contains(problem, "could not verify kubernetes deployment"):
+			appendHint("check kubectl access for this context and namespace, then retry the preflight check")
+		case strings.Contains(problem, "could not determine the current kubectl context"):
+			appendHint("set --context explicitly, or configure a current kubectl context before relying on the default")
 		case strings.Contains(problem, "already exists"):
 			appendHint("choose another --name value, or rerun with --interactive to rename it safely")
 		case strings.Contains(problem, "unsupported tunnel type"):

@@ -18,6 +18,7 @@ func newStackCommand(configPath *string) *cobra.Command {
 
 	cmd.AddCommand(
 		newStackListCommand(configPath),
+		newStackCheckCommand(configPath),
 		newStackAddCommand(configPath),
 		newStackCloneCommand(configPath),
 		newStackEditCommand(configPath),

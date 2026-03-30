@@ -18,6 +18,7 @@ func newProfileCommand(configPath *string) *cobra.Command {
 
 	cmd.AddCommand(
 		newProfileListCommand(configPath),
+		newProfileCheckCommand(configPath),
 		newProfileAddCommand(configPath),
 		newProfileImportCommand(configPath),
 		newProfileCloneCommand(configPath),

@@ -52,6 +52,131 @@ func TestValidateCommandReportsCounts(t *testing.T) {
 	}
 }
 
+func TestProfileCheckCommandReportsSSHAliasWarnings(t *testing.T) {
+	tempDir := t.TempDir()
+	homeDir := filepath.Join(tempDir, "home")
+	if err := os.MkdirAll(filepath.Join(homeDir, ".ssh"), 0o755); err != nil {
+		t.Fatalf("mkdir ssh dir: %v", err)
+	}
+	if err := os.WriteFile(filepath.Join(homeDir, ".ssh", "config"), []byte("Host bastion-prod\n  HostName 127.0.0.1\n"), 0o644); err != nil {
+		t.Fatalf("write ssh config: %v", err)
+	}
+
+	binDir := filepath.Join(tempDir, "bin")
+	if err := os.MkdirAll(binDir, 0o755); err != nil {
+		t.Fatalf("mkdir bin dir: %v", err)
+	}
+	writeExecutable(t, filepath.Join(binDir, "ssh"), "#!/bin/sh\nexit 0\n")
+	t.Setenv("HOME", homeDir)
+	t.Setenv("PATH", binDir)
+
+	configPath := filepath.Join(tempDir, "config.yaml")
+	if err := storage.SaveConfig(configPath, domain.Config{
+		Version: domain.CurrentConfigVersion,
+		Profiles: []domain.Profile{
+			{
+				Name:      "prod-db",
+				Type:      domain.TunnelTypeSSHLocal,
+				LocalPort: 35432,
+				SSH: &domain.SSHLocal{
+					Host:       "missing-alias",
+					RemoteHost: "db.internal",
+					RemotePort: 5432,
+				},
+			},
+		},
+	}); err != nil {
+		t.Fatalf("save config: %v", err)
+	}
+
+	output := executeCommand(t,
+		"--config", configPath,
+		"profile", "check", "prod-db",
+	)
+
+	if !strings.Contains(output, "readiness: Warning") {
+		t.Fatalf("expected warning readiness, got %q", output)
+	}
+	if !strings.Contains(output, `warning: SSH host alias "missing-alias" was not found`) {
+		t.Fatalf("expected ssh alias warning, got %q", output)
+	}
+	if !strings.Contains(output, "hint: set --host to a real hostname") {
+		t.Fatalf("expected ssh alias hint, got %q", output)
+	}
+}
+
+func TestProfileCheckCommandReportsKubernetesResourceBlockers(t *testing.T) {
+	tempDir := t.TempDir()
+	binDir := filepath.Join(tempDir, "bin")
+	if err := os.MkdirAll(binDir, 0o755); err != nil {
+		t.Fatalf("mkdir bin dir: %v", err)
+	}
+	writeExecutable(t, filepath.Join(binDir, "kubectl"), `#!/bin/sh
+case "$*" in
+  *"get namespace backend"*)
+    echo "namespace/backend"
+    exit 0
+    ;;
+  *"get service api"*)
+    exit 0
+    ;;
+esac
+exit 0
+`)
+	writeExecutable(t, filepath.Join(binDir, "ssh"), "#!/bin/sh\nexit 0\n")
+	t.Setenv("PATH", binDir)
+
+	kubeconfigPath := filepath.Join(tempDir, "config.kube")
+	if err := os.WriteFile(kubeconfigPath, []byte(`
+current-context: dev-cluster
+contexts:
+  - name: dev-cluster
+    context:
+      cluster: dev
+      user: dev-user
+      namespace: backend
+`), 0o644); err != nil {
+		t.Fatalf("write kubeconfig: %v", err)
+	}
+	t.Setenv("KUBECONFIG", kubeconfigPath)
+
+	configPath := filepath.Join(tempDir, "config.yaml")
+	if err := storage.SaveConfig(configPath, domain.Config{
+		Version: domain.CurrentConfigVersion,
+		Profiles: []domain.Profile{
+			{
+				Name:      "api-debug",
+				Type:      domain.TunnelTypeKubernetesPortForward,
+				LocalPort: 38080,
+				Kubernetes: &domain.Kubernetes{
+					Context:      "dev-cluster",
+					Namespace:    "backend",
+					ResourceType: "service",
+					Resource:     "api",
+					RemotePort:   80,
+				},
+			},
+		},
+	}); err != nil {
+		t.Fatalf("save config: %v", err)
+	}
+
+	output := executeCommand(t,
+		"--config", configPath,
+		"profile", "check", "api-debug",
+	)
+
+	if !strings.Contains(output, "readiness: Blocked") {
+		t.Fatalf("expected blocked readiness, got %q", output)
+	}
+	if !strings.Contains(output, `blocker: kubernetes service "api" was not found`) {
+		t.Fatalf("expected kubernetes resource blocker, got %q", output)
+	}
+	if !strings.Contains(output, "hint: set --resource to an existing service name") {
+		t.Fatalf("expected kubernetes resource hint, got %q", output)
+	}
+}
+
 func TestProfileAddSSHLocalPersistsProfile(t *testing.T) {
 	t.Parallel()
 
@@ -1156,4 +1281,12 @@ func executeCommandErrInput(t *testing.T, input string, args ...string) (string,
 	cmd.SetArgs(args)
 
 	return stdout.String(), cmd.Execute()
+}
+
+func writeExecutable(t *testing.T, path, content string) {
+	t.Helper()
+
+	if err := os.WriteFile(path, []byte(content), 0o755); err != nil {
+		t.Fatalf("write executable %s: %v", path, err)
+	}
 }

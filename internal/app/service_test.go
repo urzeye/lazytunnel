@@ -310,6 +310,36 @@ func TestServiceAnalyzeProfileStartReportsMissingCommand(t *testing.T) {
 	}
 }
 
+func TestServiceAnalyzeProfileStartIncludesProbeWarnings(t *testing.T) {
+	t.Parallel()
+
+	service, err := NewService(
+		testConfig(),
+		newFakeRuntimeController(),
+		WithPortChecker(fakePortChecker{}),
+		WithProfileProbeChecker(fakeProfileProbeChecker{results: map[string]ProfileProbeResult{
+			"prod-db": {
+				Warnings: []string{`SSH host alias "bastion-prod" was not found in ~/.ssh/config; ssh will treat it as a raw hostname`},
+			},
+		}}),
+	)
+	if err != nil {
+		t.Fatalf("new service: %v", err)
+	}
+
+	analysis, err := service.AnalyzeProfileStart("prod-db")
+	if err != nil {
+		t.Fatalf("analyze profile: %v", err)
+	}
+
+	if analysis.Status != StartReadinessWarning {
+		t.Fatalf("expected warning status, got %q", analysis.Status)
+	}
+	if len(analysis.Warnings) == 0 || !strings.Contains(analysis.Warnings[0], "SSH host alias") {
+		t.Fatalf("expected probe warning, got %#v", analysis.Warnings)
+	}
+}
+
 func TestServiceProfileViewsIncludesDefaultStoppedState(t *testing.T) {
 	t.Parallel()
 
@@ -460,6 +490,39 @@ func TestServiceAnalyzeStackStartCountsWarningMembers(t *testing.T) {
 	}
 }
 
+func TestServiceAnalyzeStackStartIncludesProbeProblems(t *testing.T) {
+	t.Parallel()
+
+	service, err := NewService(
+		testConfig(),
+		newFakeRuntimeController(),
+		WithPortChecker(fakePortChecker{}),
+		WithProfileProbeChecker(fakeProfileProbeChecker{results: map[string]ProfileProbeResult{
+			"api-debug": {
+				Problems: []string{`kubernetes service "api" was not found in namespace "backend" for context "dev-cluster"`},
+			},
+		}}),
+	)
+	if err != nil {
+		t.Fatalf("new service: %v", err)
+	}
+
+	analysis, err := service.AnalyzeStackStart("backend-dev")
+	if err != nil {
+		t.Fatalf("analyze stack: %v", err)
+	}
+
+	if analysis.BlockedCount != 1 {
+		t.Fatalf("expected one blocked member, got %#v", analysis)
+	}
+	if got := analysis.Members[1].Status; got != StartReadinessBlocked {
+		t.Fatalf("expected api-debug blocked, got %q", got)
+	}
+	if len(analysis.Members[1].Problems) == 0 || !strings.Contains(analysis.Members[1].Problems[0], `kubernetes service "api" was not found`) {
+		t.Fatalf("expected probe problem, got %#v", analysis.Members[1].Problems)
+	}
+}
+
 func TestServiceStartStackStartsInactiveMembers(t *testing.T) {
 	t.Parallel()
 
@@ -556,6 +619,36 @@ func TestServiceStartStackRejectsMissingCommandBeforeStart(t *testing.T) {
 	}
 	if got := len(runtime.startedSpecs); got != 0 {
 		t.Fatalf("expected no started specs on failed preflight, got %d", got)
+	}
+}
+
+func TestServiceStartProfileRejectsProbeProblemsBeforeStart(t *testing.T) {
+	t.Parallel()
+
+	runtime := newFakeRuntimeController()
+	service, err := NewService(
+		testConfig(),
+		runtime,
+		WithPortChecker(fakePortChecker{}),
+		WithProfileProbeChecker(fakeProfileProbeChecker{results: map[string]ProfileProbeResult{
+			"api-debug": {
+				Problems: []string{`kubernetes service "api" was not found in namespace "backend" for context "dev-cluster"`},
+			},
+		}}),
+	)
+	if err != nil {
+		t.Fatalf("new service: %v", err)
+	}
+
+	err = service.StartProfile("api-debug")
+	if err == nil {
+		t.Fatal("expected probe blocker error")
+	}
+	if !strings.Contains(err.Error(), `kubernetes service "api" was not found`) {
+		t.Fatalf("expected probe blocker error, got %v", err)
+	}
+	if got := len(runtime.startedSpecs); got != 0 {
+		t.Fatalf("expected no started specs on failed start, got %d", got)
 	}
 }
 
@@ -821,4 +914,15 @@ func (f fakeCommandChecker) CheckCommand(command string) error {
 		return err
 	}
 	return nil
+}
+
+type fakeProfileProbeChecker struct {
+	results map[string]ProfileProbeResult
+}
+
+func (f fakeProfileProbeChecker) CheckProfile(profile domain.Profile, force bool) ProfileProbeResult {
+	if result, exists := f.results[profile.Name]; exists {
+		return result
+	}
+	return ProfileProbeResult{}
 }

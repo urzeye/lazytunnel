@@ -30,6 +30,7 @@ func NewRootCommand() *cobra.Command {
 				cfg,
 				ltruntime.NewSupervisor(ltruntime.ExecProcessFactory{}),
 				app.WithSystemCommandChecks(),
+				app.WithSystemProfileProbeChecks(),
 			)
 			if err != nil {
 				return fmt.Errorf("build app service: %w", err)

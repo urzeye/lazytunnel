@@ -50,15 +50,28 @@ func WithSystemCommandChecks() ServiceOption {
 	}
 }
 
+func WithProfileProbeChecker(profileProbeChecker ProfileProbeChecker) ServiceOption {
+	return func(service *Service) {
+		service.profileProbeChecker = profileProbeChecker
+	}
+}
+
+func WithSystemProfileProbeChecks() ServiceOption {
+	return func(service *Service) {
+		service.profileProbeChecker = newSystemProfileProbeChecker()
+	}
+}
+
 type Service struct {
-	config         domain.Config
-	supervisor     RuntimeController
-	portChecker    PortChecker
-	commandChecker CommandChecker
-	profiles       map[string]domain.Profile
-	profileList    []domain.Profile
-	stacks         map[string]domain.Stack
-	stackList      []domain.Stack
+	config              domain.Config
+	supervisor          RuntimeController
+	portChecker         PortChecker
+	commandChecker      CommandChecker
+	profileProbeChecker ProfileProbeChecker
+	profiles            map[string]domain.Profile
+	profileList         []domain.Profile
+	stacks              map[string]domain.Stack
+	stackList           []domain.Stack
 }
 
 type ProfileView struct {
@@ -137,14 +150,15 @@ func NewService(config domain.Config, supervisor RuntimeController, opts ...Serv
 	}
 
 	service := &Service{
-		config:         config,
-		supervisor:     supervisor,
-		portChecker:    localhostPortChecker{},
-		commandChecker: noopCommandChecker{},
-		profiles:       profiles,
-		profileList:    append([]domain.Profile(nil), config.Profiles...),
-		stacks:         stacks,
-		stackList:      append([]domain.Stack(nil), config.Stacks...),
+		config:              config,
+		supervisor:          supervisor,
+		portChecker:         localhostPortChecker{},
+		commandChecker:      noopCommandChecker{},
+		profileProbeChecker: noopProfileProbeChecker{},
+		profiles:            profiles,
+		profileList:         append([]domain.Profile(nil), config.Profiles...),
+		stacks:              stacks,
+		stackList:           append([]domain.Stack(nil), config.Stacks...),
 	}
 
 	for _, opt := range opts {
@@ -349,13 +363,9 @@ func (s *Service) AnalyzeProfileStart(name string) (ProfileStartAnalysis, error)
 		return analysis, nil
 	}
 
-	if err := s.commandChecker.CheckCommand(commandForProfile(profile)); err != nil {
-		analysis.Problems = append(analysis.Problems, err.Error())
-	}
-
-	if err := validateProfileStart(profile); err != nil {
-		analysis.Problems = append(analysis.Problems, err.Error())
-	}
+	problems, probeWarnings := s.profileDependencyChecks(profile, false)
+	analysis.Problems = append(analysis.Problems, problems...)
+	analysis.Warnings = append(analysis.Warnings, probeWarnings...)
 
 	if localPort, managed := managedLocalPort(profile); managed {
 		if owner, exists := s.activePortOwner(profile.Name, localPort); exists {
@@ -430,14 +440,9 @@ func (s *Service) AnalyzeStackStart(name string) (StackStartAnalysis, error) {
 		}
 
 		member.Warnings = append(member.Warnings, profileStartWarnings(profile)...)
-
-		if err := s.commandChecker.CheckCommand(commandForProfile(profile)); err != nil {
-			member.Problems = append(member.Problems, err.Error())
-		}
-
-		if err := validateProfileStart(profile); err != nil {
-			member.Problems = append(member.Problems, err.Error())
-		}
+		problems, probeWarnings := s.profileDependencyChecks(profile, false)
+		member.Problems = append(member.Problems, problems...)
+		member.Warnings = append(member.Warnings, probeWarnings...)
 
 		if localPort, managed := managedLocalPort(profile); managed {
 			if owner, exists := reservedPorts[localPort]; exists && owner != profile.Name {
@@ -607,12 +612,8 @@ func (s *Service) startProfile(profile domain.Profile) error {
 		return fmt.Errorf("profile %q is already active", profile.Name)
 	}
 
-	if err := s.commandChecker.CheckCommand(commandForProfile(profile)); err != nil {
-		return err
-	}
-
-	if err := validateProfileStart(profile); err != nil {
-		return err
+	if problems, _ := s.profileDependencyChecks(profile, true); len(problems) > 0 {
+		return problemsToError(problems)
 	}
 
 	if localPort, managed := managedLocalPort(profile); managed {
@@ -668,13 +669,10 @@ func (s *Service) preflightStackStart(stack domain.Stack) ([]domain.Profile, err
 			continue
 		}
 
-		if err := s.commandChecker.CheckCommand(commandForProfile(profile)); err != nil {
-			errs = append(errs, fmt.Errorf("profile %q: %w", profile.Name, err))
-			continue
-		}
-
-		if err := validateProfileStart(profile); err != nil {
-			errs = append(errs, fmt.Errorf("profile %q: %w", profile.Name, err))
+		if problems, _ := s.profileDependencyChecks(profile, true); len(problems) > 0 {
+			for _, problem := range problems {
+				errs = append(errs, fmt.Errorf("profile %q: %s", profile.Name, problem))
+			}
 			continue
 		}
 
@@ -699,6 +697,36 @@ func (s *Service) preflightStackStart(stack domain.Stack) ([]domain.Profile, err
 	}
 
 	return pending, nil
+}
+
+func (s *Service) profileDependencyChecks(profile domain.Profile, force bool) ([]string, []string) {
+	problems := make([]string, 0, 4)
+	warnings := make([]string, 0, 4)
+
+	if err := s.commandChecker.CheckCommand(commandForProfile(profile)); err != nil {
+		problems = append(problems, err.Error())
+	}
+
+	if err := validateProfileStart(profile); err != nil {
+		problems = append(problems, err.Error())
+	}
+
+	if len(problems) > 0 {
+		return problems, warnings
+	}
+
+	probeResult := s.profileProbeChecker.CheckProfile(profile, force)
+	problems = append(problems, probeResult.Problems...)
+	warnings = append(warnings, probeResult.Warnings...)
+	return problems, warnings
+}
+
+func problemsToError(problems []string) error {
+	errs := make([]error, 0, len(problems))
+	for _, problem := range problems {
+		errs = append(errs, errors.New(problem))
+	}
+	return errors.Join(errs...)
 }
 
 func (s *Service) activePortOwner(excludedName string, port int) (string, bool) {

@@ -63,10 +63,34 @@ func (m Model) profileProblemFix(profile domain.Profile, problem string) string 
 		return m.t("Press e to pin a specific Context, or keep it blank intentionally to follow kubectl.", "按 e 固定一个 Context，或者明确接受留空时跟随 kubectl 当前 context。")
 	case strings.Contains(problem, "namespace is empty"):
 		return m.t("Press e to pin a Namespace, or keep it blank intentionally to follow the context default.", "按 e 固定一个命名空间，或者明确接受留空时跟随当前 context 默认值。")
+	case strings.Contains(problem, "could not determine the current kubectl context"):
+		return m.t("Press e to set an explicit Context, or configure a current kubectl context first.", "按 e 设置明确的 Context，或者先配置当前 kubectl context。")
+	case strings.Contains(problem, "kubernetes context") && strings.Contains(problem, "was not found"):
+		return m.t("Press e and switch Context to an existing kube context, or re-import contexts after fixing kubeconfig.", "按 e 把 Context 改成现有 kube context，或者修好 kubeconfig 后重新导入。")
+	case strings.Contains(problem, "could not verify Kubernetes context information"):
+		return m.t("Check KUBECONFIG or ~/.kube/config access, or press e to set Context explicitly after fixing it.", "检查 KUBECONFIG 或 ~/.kube/config 的访问，再按 e 明确设置 Context。")
+	case strings.Contains(problem, "kubernetes namespace") && strings.Contains(problem, "was not found"):
+		return m.t("Press e and switch Namespace to one that exists, or leave it blank to use the context default.", "按 e 把 Namespace 改成存在的值，或者留空改用 context 默认值。")
+	case strings.Contains(problem, "could not verify kubernetes namespace"):
+		return m.t("Check kubectl access for this context, then retry the check or start anyway if you trust it.", "检查当前 context 的 kubectl 访问，再重试检查；如果你确定无误，也可以继续启动。")
+	case strings.Contains(problem, `resource "change-me" is still a placeholder`):
+		return m.t("Press e and replace Resource with the real service, pod, or deployment name.", "按 e 把 Resource 改成真实的 service、pod 或 deployment 名称。")
+	case strings.Contains(problem, "kubernetes service") && strings.Contains(problem, "was not found"):
+		return m.t("Press e and switch Resource to an existing service in the target namespace.", "按 e 把 Resource 改成目标命名空间里存在的 service。")
+	case strings.Contains(problem, "kubernetes pod") && strings.Contains(problem, "was not found"):
+		return m.t("Press e and switch Resource to an existing pod in the target namespace.", "按 e 把 Resource 改成目标命名空间里存在的 pod。")
+	case strings.Contains(problem, "kubernetes deployment") && strings.Contains(problem, "was not found"):
+		return m.t("Press e and switch Resource to an existing deployment in the target namespace.", "按 e 把 Resource 改成目标命名空间里存在的 deployment。")
+	case strings.Contains(problem, "could not verify kubernetes service") || strings.Contains(problem, "could not verify kubernetes pod") || strings.Contains(problem, "could not verify kubernetes deployment"):
+		return m.t("Check kubectl access for this context and namespace, then retry the check or start if you trust the target.", "检查当前 context 和 namespace 的 kubectl 访问，再重试检查；如果你确定目标没问题，也可以继续启动。")
 	case strings.Contains(problem, "remote bind address 0.0.0.0"):
 		return m.t("Press e and switch Bind Address to 127.0.0.1 unless you need public exposure.", "除非你确实需要对外暴露，否则按 e 把监听地址改成 127.0.0.1。")
 	case strings.Contains(problem, "is not loopback; other machines may reach this proxy"):
 		return m.t("Press e and switch Bind Address to 127.0.0.1 unless you need LAN access.", "除非你确实需要局域网访问，否则按 e 把监听地址改成 127.0.0.1。")
+	case strings.Contains(problem, "SSH host alias") && strings.Contains(problem, "was not found"):
+		return m.t("Press e and switch Host to a real hostname, or restore the missing alias in ~/.ssh/config.", "按 e 把 Host 改成真实主机名，或者在 ~/.ssh/config 里恢复这个 alias。")
+	case strings.Contains(problem, "could not verify SSH host alias"):
+		return m.t("Check ~/.ssh/config readability, or press e and set Host to a direct hostname.", "检查 ~/.ssh/config 是否可读，或者按 e 把 Host 改成直接主机名。")
 	default:
 		if hasLabel(profile.Labels, "draft") {
 			return m.t("Press e to finish this draft, or press E for raw YAML editing.", "按 e 完成这个草稿，或按 E 直接编辑原始 YAML。")

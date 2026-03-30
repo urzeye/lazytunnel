@@ -168,6 +168,7 @@ func newProfileEditorState(profile domain.Profile, originName string, language d
 		editor.cursors[key] = runeLen(value)
 	}
 	editor.rebuild(language)
+	editor.focusFieldByKey(recommendedProfileEditorField(profile))
 	return editor
 }
 
@@ -189,7 +190,81 @@ func newStackEditorState(stack domain.Stack, originName string, language domain.
 	}
 	editor.setStackMembersWithCursors(stack.Profiles, nil)
 	editor.rebuild(language)
+	editor.focusFieldByKey(recommendedStackEditorField(stack))
 	return editor
+}
+
+func recommendedProfileEditorField(profile domain.Profile) string {
+	if strings.TrimSpace(profile.Name) == "" {
+		return editorFieldName
+	}
+
+	switch profile.Type {
+	case domain.TunnelTypeKubernetesPortForward:
+		if profile.Kubernetes == nil {
+			return editorFieldContext
+		}
+		switch {
+		case strings.TrimSpace(profile.Kubernetes.Context) == "":
+			return editorFieldContext
+		case strings.EqualFold(strings.TrimSpace(profile.Kubernetes.Resource), "change-me") || strings.TrimSpace(profile.Kubernetes.Resource) == "":
+			return editorFieldResource
+		case profile.Kubernetes.RemotePort == 0:
+			return editorFieldRemotePort
+		case profile.LocalPort == 0:
+			return editorFieldLocalPort
+		}
+	case domain.TunnelTypeSSHRemote:
+		if profile.SSHRemote == nil {
+			return editorFieldHost
+		}
+		switch {
+		case strings.TrimSpace(profile.SSHRemote.Host) == "" || strings.TrimSpace(profile.SSHRemote.Host) == "example-bastion":
+			return editorFieldHost
+		case profile.SSHRemote.BindPort == 0:
+			return editorFieldBindPort
+		case strings.TrimSpace(profile.SSHRemote.TargetHost) == "":
+			return editorFieldTargetHost
+		case profile.SSHRemote.TargetPort == 0:
+			return editorFieldTargetPort
+		}
+	case domain.TunnelTypeSSHDynamic:
+		if profile.SSHDynamic == nil {
+			return editorFieldHost
+		}
+		switch {
+		case strings.TrimSpace(profile.SSHDynamic.Host) == "" || strings.TrimSpace(profile.SSHDynamic.Host) == "example-bastion":
+			return editorFieldHost
+		case profile.LocalPort == 0:
+			return editorFieldLocalPort
+		}
+	default:
+		if profile.SSH == nil {
+			return editorFieldHost
+		}
+		switch {
+		case strings.TrimSpace(profile.SSH.Host) == "" || strings.TrimSpace(profile.SSH.Host) == "example-bastion":
+			return editorFieldHost
+		case strings.TrimSpace(profile.SSH.RemoteHost) == "" || strings.TrimSpace(profile.SSH.RemoteHost) == "127.0.0.1":
+			return editorFieldRemoteHost
+		case profile.SSH.RemotePort == 0 || (hasLabel(profile.Labels, "imported") && profile.SSH.RemotePort == 80):
+			return editorFieldRemotePort
+		case profile.LocalPort == 0:
+			return editorFieldLocalPort
+		}
+	}
+
+	return editorFieldName
+}
+
+func recommendedStackEditorField(stack domain.Stack) string {
+	if len(stack.Profiles) == 0 {
+		return stackMemberFieldKey(0)
+	}
+	if hasLabel(stack.Labels, "draft") {
+		return stackMemberFieldKey(0)
+	}
+	return editorFieldName
 }
 
 func editableTunnelType(kind domain.TunnelType) domain.TunnelType {
@@ -918,14 +993,17 @@ func (m Model) renderEditorBody(width, height int) string {
 		return renderFixedPanel(m.editorTitle(), nil, width, height, true)
 	}
 
-	fieldCount := len(m.editor.fields)
-	visibleFields := max(1, bodyHeight-3)
-	start, end := windowAroundSelection(fieldCount, m.editor.focus, visibleFields)
-
 	body := []string{
 		editorMetaStyle.Render(truncateText(m.editorInstructionLine(), innerWidth)),
-		editorMetaStyle.Render(truncateText(m.editorContextLine(), innerWidth)),
 	}
+	if guide := m.editorGuideLine(); guide != "" {
+		body = append(body, editorMetaStyle.Render(truncateText(guide, innerWidth)))
+	}
+	body = append(body, editorMetaStyle.Render(truncateText(m.editorContextLine(), innerWidth)))
+
+	fieldCount := len(m.editor.fields)
+	visibleFields := max(1, bodyHeight-len(body)-1)
+	start, end := windowAroundSelection(fieldCount, m.editor.focus, visibleFields)
 	for idx := start; idx < end; idx++ {
 		body = append(body, m.renderEditorField(m.editor.fields[idx], idx == m.editor.focus, innerWidth))
 	}
@@ -985,6 +1063,44 @@ func (m Model) editorContextLine() string {
 	)
 }
 
+func (m Model) editorGuideLine() string {
+	if m.editor == nil {
+		return ""
+	}
+
+	switch m.editor.kind {
+	case formEditorStack:
+		labels := parseEditorList(m.editor.values[editorFieldLabels])
+		if !hasLabel(labels, "draft") {
+			return ""
+		}
+		fieldKey := recommendedStackEditorField(domain.Stack{Labels: labels, Profiles: stackEditorMembers(m.editor)})
+		field, ok := m.editor.fieldByKey(fieldKey)
+		if !ok {
+			return m.t("Guide: finish the member list, then save and remove the draft label when ready.", "向导：先补完成员列表，准备好后保存并移除 draft 标签。")
+		}
+		return m.tf(
+			"Guide: next fill %s, then save and remove the draft label when ready.",
+			"向导：下一步先补 %s，准备好后保存并移除 draft 标签。",
+			field.label,
+		)
+	default:
+		profile := m.editor.profileDraft()
+		if !hasLabel(profile.Labels, "draft") {
+			return ""
+		}
+		field, ok := m.editor.fieldByKey(recommendedProfileEditorField(profile))
+		if !ok {
+			return m.t("Guide: finish the key target fields, then save and remove the draft label when ready.", "向导：先补完关键目标字段，准备好后保存并移除 draft 标签。")
+		}
+		return m.tf(
+			"Guide: next fill %s, then save and remove the draft label when ready.",
+			"向导：下一步先补 %s，准备好后保存并移除 draft 标签。",
+			field.label,
+		)
+	}
+}
+
 func (m Model) editorHelpLine() string {
 	if m.editor == nil {
 		return ""
@@ -994,7 +1110,44 @@ func (m Model) editorHelpLine() string {
 	if !ok {
 		return ""
 	}
-	return field.help
+	help := field.help
+	if m.editor.kind == formEditorStack && isStackMemberFieldKey(field.key) {
+		if available := m.stackMemberSuggestionsLine(); available != "" {
+			if help != "" {
+				help += " "
+			}
+			help += available
+		}
+	}
+	return help
+}
+
+func stackEditorMembers(editor *formEditorState) []string {
+	if editor == nil {
+		return nil
+	}
+	members, _ := editor.stackMemberSnapshot()
+	return members
+}
+
+func (m Model) stackMemberSuggestionsLine() string {
+	if m.service == nil {
+		return ""
+	}
+
+	names := profileNames(m.service.Config())
+	if len(names) == 0 {
+		return ""
+	}
+	if len(names) > 6 {
+		names = append(names[:6], "...")
+	}
+
+	return m.tf(
+		"Available profiles: %s",
+		"可用配置：%s",
+		strings.Join(names, ", "),
+	)
 }
 
 func (m Model) renderEditorField(field formField, active bool, width int) string {
@@ -1253,6 +1406,14 @@ func (m Model) saveProfileEditor() Model {
 }
 
 func (m Model) saveStackEditor() Model {
+	rawMembers, _ := m.editor.stackMemberSnapshot()
+	nonEmptyMembers := 0
+	for _, member := range rawMembers {
+		if strings.TrimSpace(member) != "" {
+			nonEmptyMembers++
+		}
+	}
+
 	stack, err := m.editor.stackFromValues(true)
 	if err != nil {
 		m.lastError = err.Error()
@@ -1292,6 +1453,10 @@ func (m Model) saveStackEditor() Model {
 	m.inspectorTab = inspectorTabDetails
 	m.inspectorScroll = 0
 	m.selectStackByName(stack.Name)
+	if removed := nonEmptyMembers - len(stack.Profiles); removed > 0 {
+		m.lastNotice = m.tf("Saved stack %s and removed %d duplicate member entries.", "已保存组合 %s，并去掉 %d 个重复成员。", stack.Name, removed)
+		return m
+	}
 	m.lastNotice = m.tf("Saved stack %s.", "已保存组合 %s。", stack.Name)
 	return m
 }
@@ -1402,6 +1567,7 @@ func (e *formEditorState) stackFromValues(strict bool) (domain.Stack, error) {
 		}
 		profiles = append(profiles, member)
 	}
+	profiles = dedupePreserveOrder(profiles)
 
 	stack := domain.Stack{
 		Name:        strings.TrimSpace(e.values[editorFieldName]),
@@ -1476,6 +1642,19 @@ func parseEditorList(value string) []string {
 		cleaned = append(cleaned, part)
 	}
 	return cleaned
+}
+
+func dedupePreserveOrder(values []string) []string {
+	seen := make(map[string]struct{}, len(values))
+	deduped := make([]string, 0, len(values))
+	for _, value := range values {
+		if _, exists := seen[value]; exists {
+			continue
+		}
+		seen[value] = struct{}{}
+		deduped = append(deduped, value)
+	}
+	return deduped
 }
 
 func configProfileExists(cfg domain.Config, name string) bool {
