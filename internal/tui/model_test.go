@@ -398,6 +398,50 @@ func TestRenderInspectorTabsShowsKeyHints(t *testing.T) {
 	}
 }
 
+func TestTransientNoticeAutoHidesAndMouseLayoutReflows(t *testing.T) {
+	t.Parallel()
+
+	service, err := app.NewService(storage.SampleConfig(), newStubRuntimeController())
+	if err != nil {
+		t.Fatalf("new service: %v", err)
+	}
+
+	base := time.Date(2026, 3, 30, 12, 0, 0, 0, time.UTC)
+	model := Model{
+		service: service,
+		width:   140,
+		height:  32,
+		now:     base,
+	}
+	model.setNotice("Switched language to English.")
+
+	profiles := filterProfileViews(service.ProfileViews(), "")
+	stacks := filterStackViews(service.StackViews(), "")
+	before := model.mouseLayout(profiles, stacks)
+	if model.renderStatusLine(model.contentWidth()) == "" {
+		t.Fatal("expected notice status line to be visible before ttl")
+	}
+
+	model.now = base.Add(noticeTTL + time.Second)
+	if model.renderStatusLine(model.contentWidth()) != "" {
+		t.Fatal("expected notice status line to hide after ttl")
+	}
+	if model.hasStatusLine() {
+		t.Fatal("expected status line accounting to hide after ttl")
+	}
+
+	after := model.mouseLayout(profiles, stacks)
+	if before.profiles.panel.y <= after.profiles.panel.y {
+		t.Fatalf("expected profiles panel to move up after notice hides, before=%d after=%d", before.profiles.panel.y, after.profiles.panel.y)
+	}
+
+	x := panelContentX(after.profiles.panel)
+	y := panelBodyStartY(after.profiles.panel)
+	if idx, ok := after.profiles.rowIndexAt(x, y); !ok || idx != 0 {
+		t.Fatalf("expected first profile row to remain clickable after reflow, got idx=%d ok=%v", idx, ok)
+	}
+}
+
 func TestNormalizeLogMessageCollapsesMultilineWhitespace(t *testing.T) {
 	t.Parallel()
 

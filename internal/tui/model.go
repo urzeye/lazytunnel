@@ -169,6 +169,7 @@ const (
 	defaultContentHeight = 24
 	minTwoColumnWidth    = 112
 	minTwoColumnHeight   = 18
+	noticeTTL            = 4 * time.Second
 )
 
 type runtimeEventMsg ltruntime.Event
@@ -274,6 +275,7 @@ type Model struct {
 	inspectorTab    inspectorTab
 	inspectorScroll int
 	lastNotice      string
+	lastNoticeAt    time.Time
 	lastError       string
 	editor          *formEditorState
 }
@@ -302,6 +304,9 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 
 	case clockTickMsg:
 		m.now = time.Time(msg)
+		if m.lastNotice != "" && !m.noticeVisible() {
+			m.clearNotice()
+		}
 		return m, tickClock()
 
 	case runtimeEventMsg:
@@ -556,10 +561,12 @@ func (m Model) renderStatusLine(width int) string {
 		return renderInlineBanner(importPromptStyle, m.importPromptMessage(), width)
 	case m.lastError != "":
 		return renderInlineBanner(errorBannerStyle, m.t("Last error: ", "最近错误: ")+m.lastError, width)
-	case m.lastNotice != "":
-		return renderInlineBanner(noticeBannerStyle, m.lastNotice, width)
 	default:
-		return ""
+		notice := m.activeNotice()
+		if notice == "" {
+			return ""
+		}
+		return renderInlineBanner(noticeBannerStyle, notice, width)
 	}
 }
 
@@ -1342,7 +1349,7 @@ func (m Model) initializeSampleConfig() Model {
 	m.selectedStack = 0
 	m.inspectorTab = inspectorTabDetails
 	m.inspectorScroll = 0
-	m.lastNotice = m.t("Initialized sample config with starter profiles and a stack.", "已初始化示例配置，包含示例配置和一个组合。")
+	m.setNotice(m.t("Initialized sample config with starter profiles and a stack.", "已初始化示例配置，包含示例配置和一个组合。"))
 	return m
 }
 
@@ -1369,7 +1376,7 @@ func (m Model) createStarterProfileDraft() Model {
 	m.inspectorScroll = 0
 	m.selectProfileByName(profile.Name)
 	m = m.beginProfileEditor(profile, profile.Name)
-	m.lastNotice = m.tf("Created starter profile %s. Finish it in the form editor.", "已创建配置草稿 %s。现在可直接在表单里完善。", profile.Name)
+	m.setNotice(m.tf("Created starter profile %s. Finish it in the form editor.", "已创建配置草稿 %s。现在可直接在表单里完善。", profile.Name))
 	return m
 }
 
@@ -1401,7 +1408,7 @@ func (m Model) createStarterStackDraft(profiles []app.ProfileView, stacks []app.
 	m.inspectorScroll = 0
 	m.selectStackByName(stack.Name)
 	m = m.beginStackEditor(stack, stack.Name)
-	m.lastNotice = m.tf("Created starter stack %s. Finish it in the form editor.", "已创建组合草稿 %s。现在可直接在表单里完善。", stack.Name)
+	m.setNotice(m.tf("Created starter stack %s. Finish it in the form editor.", "已创建组合草稿 %s。现在可直接在表单里完善。", stack.Name))
 	return m
 }
 
@@ -1445,7 +1452,7 @@ func (m Model) toggleLanguage() Model {
 	}
 
 	m.service.ReplaceConfig(cfg)
-	m.lastNotice = translatef(next, "Switched language to %s.", "已切换语言为%s。", languageDisplayName(next))
+	m.setNotice(translatef(next, "Switched language to %s.", "已切换语言为%s。", languageDisplayName(next)))
 	return m
 }
 
@@ -1479,7 +1486,7 @@ func (m Model) restartSelection(profiles []app.ProfileView, stacks []app.StackVi
 			m.lastError = err.Error()
 			return m
 		}
-		m.lastNotice = m.tf("Restarted stack %s.", "已重启组合 %s。", name)
+		m.setNotice(m.tf("Restarted stack %s.", "已重启组合 %s。", name))
 		return m
 	}
 
@@ -1489,7 +1496,7 @@ func (m Model) restartSelection(profiles []app.ProfileView, stacks []app.StackVi
 			m.lastError = err.Error()
 			return m
 		}
-		m.lastNotice = m.tf("Restarted profile %s.", "已重启配置 %s。", name)
+		m.setNotice(m.tf("Restarted profile %s.", "已重启配置 %s。", name))
 		return m
 	}
 
@@ -1524,7 +1531,7 @@ func (m Model) cloneSelectedProfile(profiles []app.ProfileView) Model {
 	m.inspectorTab = inspectorTabDetails
 	m.inspectorScroll = 0
 	m.selectProfileByName(profile.Name)
-	m.lastNotice = m.tf("Cloned profile %s to %s.", "已将配置 %s 克隆为 %s。", selected.Profile.Name, profile.Name)
+	m.setNotice(m.tf("Cloned profile %s to %s.", "已将配置 %s 克隆为 %s。", selected.Profile.Name, profile.Name))
 	return m
 }
 
@@ -1549,7 +1556,7 @@ func (m Model) cloneSelectedStack(stacks []app.StackView) Model {
 	m.inspectorTab = inspectorTabDetails
 	m.inspectorScroll = 0
 	m.selectStackByName(stack.Name)
-	m.lastNotice = m.tf("Cloned stack %s to %s.", "已将组合 %s 克隆为 %s。", selected.Stack.Name, stack.Name)
+	m.setNotice(m.tf("Cloned stack %s to %s.", "已将组合 %s 克隆为 %s。", selected.Stack.Name, stack.Name))
 	return m
 }
 
@@ -1570,7 +1577,7 @@ func (m Model) reloadConfigFromDisk(successNotice string) Model {
 	m.selectedStack = 0
 	m.inspectorScroll = 0
 	m.pendingDelete = nil
-	m.lastNotice = successNotice
+	m.setNotice(successNotice)
 	return m
 }
 
@@ -1605,7 +1612,7 @@ func (m Model) focusProfileByName(name string, notice string) Model {
 	}
 	m.selectProfileByName(name)
 	if notice != "" {
-		m.lastNotice = notice
+		m.setNotice(notice)
 	}
 	return m
 }
@@ -1693,7 +1700,7 @@ func (m Model) handleDeleteKey(msg tea.KeyMsg, profiles []app.ProfileView, stack
 	switch msg.String() {
 	case "n", "esc":
 		m.pendingDelete = nil
-		m.lastNotice = m.t("Delete cancelled.", "已取消删除。")
+		m.setNotice(m.t("Delete cancelled.", "已取消删除。"))
 		return m, true
 	case "y", "enter":
 		m = m.confirmDelete()
@@ -1742,7 +1749,7 @@ func (m Model) handleMouse(msg tea.MouseMsg, profiles []app.ProfileView, stacks 
 	}
 
 	if layout.headerFilter.contains(msg.X, msg.Y) {
-		m.lastNotice = ""
+		m.clearNotice()
 		m.filterMode = true
 		m.filterScope = m.defaultFilterScope()
 		return m, true
@@ -1796,7 +1803,7 @@ func (m Model) handleImportKey(msg tea.KeyMsg) (Model, bool) {
 	switch msg.String() {
 	case "esc":
 		m.importMode = false
-		m.lastNotice = m.t("Import cancelled.", "已取消导入。")
+		m.setNotice(m.t("Import cancelled.", "已取消导入。"))
 		return m, true
 	case "s", "S":
 		m = m.importSSHDraftProfiles()
@@ -1905,7 +1912,7 @@ func (m Model) confirmDelete() Model {
 			return m
 		}
 
-		m.lastNotice = profileDeleteNotice(m.language(), result)
+		m.setNotice(profileDeleteNotice(m.language(), result))
 		return m
 
 	case deleteKindStack:
@@ -1917,7 +1924,7 @@ func (m Model) confirmDelete() Model {
 			return m
 		}
 
-		m.lastNotice = m.tf("Removed stack %s.", "已移除组合 %s。", result.Name)
+		m.setNotice(m.tf("Removed stack %s.", "已移除组合 %s。", result.Name))
 		return m
 	default:
 		return m
@@ -1953,12 +1960,39 @@ func (m Model) currentTime() time.Time {
 	return m.now
 }
 
+func (m Model) activeNotice() string {
+	if !m.noticeVisible() {
+		return ""
+	}
+	return m.lastNotice
+}
+
+func (m Model) noticeVisible() bool {
+	if m.lastNotice == "" {
+		return false
+	}
+	if m.lastNoticeAt.IsZero() {
+		return true
+	}
+	return m.currentTime().Sub(m.lastNoticeAt) < noticeTTL
+}
+
+func (m *Model) setNotice(notice string) {
+	m.lastNotice = notice
+	m.lastNoticeAt = m.currentTime()
+}
+
+func (m *Model) clearNotice() {
+	m.lastNotice = ""
+	m.lastNoticeAt = time.Time{}
+}
+
 func (m Model) showHint() bool {
 	return m.contentHeight() >= 10
 }
 
 func (m Model) hasStatusLine() bool {
-	return m.pendingDelete != nil || m.importMode || m.lastError != "" || m.lastNotice != ""
+	return m.pendingDelete != nil || m.importMode || m.lastError != "" || m.activeNotice() != ""
 }
 
 func (m Model) contentOrigin() (int, int) {
@@ -2591,7 +2625,7 @@ func (m Model) applyImportedConfig(cfg domain.Config, importedNames []string, cr
 	m.importMode = false
 
 	if created == 0 && updated == 0 {
-		m.lastNotice = m.tf("Import finished: 0 created, 0 updated, %d skipped.", "导入完成: 新建 0，更新 0，跳过 %d。", skipped)
+		m.setNotice(m.tf("Import finished: 0 created, 0 updated, %d skipped.", "导入完成: 新建 0，更新 0，跳过 %d。", skipped))
 		return m
 	}
 
@@ -2611,7 +2645,7 @@ func (m Model) applyImportedConfig(cfg domain.Config, importedNames []string, cr
 	if len(importedNames) > 0 {
 		m.selectProfileByName(importedNames[0])
 	}
-	m.lastNotice = successNotice + m.t(" Press e to finish the selected draft in the form editor.", " 按 e 可直接在表单里完善当前选中的草稿。")
+	m.setNotice(successNotice + m.t(" Press e to finish the selected draft in the form editor.", " 按 e 可直接在表单里完善当前选中的草稿。"))
 	return m
 }
 
