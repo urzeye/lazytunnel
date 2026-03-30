@@ -23,11 +23,21 @@ type Result struct {
 }
 
 type sshConfigEntry struct {
-	Alias    string
-	HostName string
-	User     string
-	Port     int
-	Source   string
+	Alias         string
+	HostName      string
+	User          string
+	Port          int
+	IdentityFiles []string
+	Source        string
+}
+
+type SSHConfigHost struct {
+	Alias         string
+	HostName      string
+	User          string
+	Port          int
+	IdentityFiles []string
+	Source        string
 }
 
 type kubeconfigFile struct {
@@ -111,6 +121,34 @@ func ImportSSHConfig(cfg domain.Config, path string, overwrite bool) (domain.Con
 	}
 
 	return updated, result, nil
+}
+
+func LookupSSHConfigHost(path, alias string) (SSHConfigHost, string, bool, error) {
+	if strings.TrimSpace(path) == "" {
+		path = DefaultSSHConfigPath()
+	}
+
+	entries, resolvedPath, err := loadSSHConfigEntries(path)
+	if err != nil {
+		return SSHConfigHost{}, "", false, err
+	}
+
+	alias = strings.TrimSpace(alias)
+	for _, entry := range entries {
+		if entry.Alias != alias {
+			continue
+		}
+		return SSHConfigHost{
+			Alias:         entry.Alias,
+			HostName:      entry.HostName,
+			User:          entry.User,
+			Port:          entry.Port,
+			IdentityFiles: append([]string(nil), entry.IdentityFiles...),
+			Source:        entry.Source,
+		}, resolvedPath, true, nil
+	}
+
+	return SSHConfigHost{}, resolvedPath, false, nil
 }
 
 func ImportKubeContexts(cfg domain.Config, path string, overwrite bool) (domain.Config, Result, error) {
@@ -209,10 +247,11 @@ func collectSSHConfigEntries(path string, visited map[string]struct{}, entriesBy
 	defer file.Close()
 
 	type sshBlock struct {
-		Aliases  []string
-		HostName string
-		User     string
-		Port     int
+		Aliases       []string
+		HostName      string
+		User          string
+		Port          int
+		IdentityFiles []string
 	}
 
 	var current *sshBlock
@@ -226,11 +265,12 @@ func collectSSHConfigEntries(path string, visited map[string]struct{}, entriesBy
 				continue
 			}
 			entriesByAlias[alias] = sshConfigEntry{
-				Alias:    alias,
-				HostName: current.HostName,
-				User:     current.User,
-				Port:     current.Port,
-				Source:   absolutePath,
+				Alias:         alias,
+				HostName:      current.HostName,
+				User:          current.User,
+				Port:          current.Port,
+				IdentityFiles: append([]string(nil), current.IdentityFiles...),
+				Source:        absolutePath,
 			}
 			*order = append(*order, alias)
 		}
@@ -282,6 +322,10 @@ func collectSSHConfigEntries(path string, visited map[string]struct{}, entriesBy
 				if port, err := strconv.Atoi(values[0]); err == nil && port > 0 {
 					current.Port = port
 				}
+			}
+		case "identityfile":
+			if current != nil {
+				current.IdentityFiles = append(current.IdentityFiles, values...)
 			}
 		}
 	}

@@ -86,6 +86,10 @@ func collectProfileValidationHints(profileName string, profile domain.Profile, p
 			appendHint("set --host to a real hostname, or import / restore the missing SSH alias in ~/.ssh/config")
 		case strings.Contains(problem, "could not verify SSH host alias"):
 			appendHint("check ~/.ssh/config readability, or set --host to a direct hostname instead of relying on an alias")
+		case strings.Contains(problem, "configured SSH identity file") && strings.Contains(problem, "was not found on disk"):
+			appendHint("restore the missing private key file, or update the SSH config IdentityFile path for this alias")
+		case strings.Contains(problem, "could not inspect configured SSH identity file"):
+			appendHint("check file permissions for the configured key path, or update the SSH config IdentityFile to a readable file")
 		case strings.Contains(problem, "kubernetes context") && strings.Contains(problem, "was not found"):
 			appendHint("set --context to an existing kube context, or import kube contexts again and pick a valid one")
 		case strings.Contains(problem, "could not verify Kubernetes context information"):

@@ -116,6 +116,82 @@ func TestSystemProfileProbeCheckerWarnsWhenAliasStillMissing(t *testing.T) {
 	}
 }
 
+func TestSystemProfileProbeCheckerWarnsWhenConfiguredIdentityFileIsMissing(t *testing.T) {
+	homeDir := t.TempDir()
+	t.Setenv("HOME", homeDir)
+	if err := os.MkdirAll(filepath.Join(homeDir, ".ssh"), 0o755); err != nil {
+		t.Fatalf("mkdir ssh dir: %v", err)
+	}
+	if err := os.WriteFile(filepath.Join(homeDir, ".ssh", "config"), []byte("Host bastion-prod\n  HostName bastion.internal\n  IdentityFile ~/.ssh/work_ed25519\n"), 0o644); err != nil {
+		t.Fatalf("write ssh config: %v", err)
+	}
+
+	checker := newSystemProfileProbeChecker()
+	checker.runner = fakeCommandOutputRunner{
+		results: map[string]fakeCommandOutputResult{
+			"ssh -G bastion-prod": {
+				output: "host bastion-prod\nhostname bastion.internal\nidentityfile ~/.ssh/work_ed25519\n",
+			},
+		},
+	}
+
+	result := checker.CheckProfile(testSSHProfile("bastion-prod"), true)
+	if len(result.Problems) != 0 {
+		t.Fatalf("expected no problems, got %#v", result.Problems)
+	}
+	if len(result.Warnings) == 0 || !strings.Contains(result.Warnings[0], `configured SSH identity file "~/.ssh/work_ed25519"`) {
+		t.Fatalf("expected missing identity-file warning, got %#v", result.Warnings)
+	}
+}
+
+func TestSystemProfileProbeCheckerUsesKubectlCurrentContextWhenProfileContextIsEmpty(t *testing.T) {
+	kubeconfigPath := filepath.Join(t.TempDir(), "config.kube")
+	if err := os.WriteFile(kubeconfigPath, []byte(`
+contexts:
+  - name: dev-cluster
+    context:
+      cluster: dev
+      user: dev-user
+      namespace: backend
+`), 0o644); err != nil {
+		t.Fatalf("write kubeconfig: %v", err)
+	}
+	t.Setenv("KUBECONFIG", kubeconfigPath)
+
+	checker := newSystemProfileProbeChecker()
+	checker.runner = fakeCommandOutputRunner{
+		results: map[string]fakeCommandOutputResult{
+			"kubectl config current-context": {
+				output: "dev-cluster\n",
+			},
+			"kubectl --request-timeout=5s --context dev-cluster get namespace backend -o name --ignore-not-found": {
+				output: "namespace/backend\n",
+			},
+			"kubectl --request-timeout=5s --context dev-cluster --namespace backend get service api -o name --ignore-not-found": {
+				output: "service/api\n",
+			},
+		},
+	}
+
+	result := checker.CheckProfile(domain.Profile{
+		Name:      "api-debug",
+		Type:      domain.TunnelTypeKubernetesPortForward,
+		LocalPort: 18080,
+		Kubernetes: &domain.Kubernetes{
+			Namespace:    "backend",
+			ResourceType: "service",
+			Resource:     "api",
+			RemotePort:   80,
+		},
+	}, true)
+	if len(result.Problems) != 0 {
+		t.Fatalf("expected no problems, got %#v", result.Problems)
+	}
+	if len(result.Warnings) != 0 {
+		t.Fatalf("expected no warnings, got %#v", result.Warnings)
+	}
+}
+
 type fakeCommandOutputRunner struct {
 	results map[string]fakeCommandOutputResult
 }

@@ -164,6 +164,67 @@ exit 0
 	}
 }
 
+func TestProfileCheckCommandReportsMissingConfiguredSSHIdentityFile(t *testing.T) {
+	tempDir := t.TempDir()
+	homeDir := filepath.Join(tempDir, "home")
+	if err := os.MkdirAll(filepath.Join(homeDir, ".ssh"), 0o755); err != nil {
+		t.Fatalf("mkdir ssh dir: %v", err)
+	}
+	if err := os.WriteFile(filepath.Join(homeDir, ".ssh", "config"), []byte("Host bastion-prod\n  HostName bastion.internal\n  IdentityFile ~/.ssh/work_ed25519\n"), 0o644); err != nil {
+		t.Fatalf("write ssh config: %v", err)
+	}
+
+	binDir := filepath.Join(tempDir, "bin")
+	if err := os.MkdirAll(binDir, 0o755); err != nil {
+		t.Fatalf("mkdir bin dir: %v", err)
+	}
+	writeExecutable(t, filepath.Join(binDir, "ssh"), `#!/bin/sh
+if [ "$1" = "-G" ]; then
+  echo "host bastion-prod"
+  echo "hostname bastion.internal"
+  echo "identityfile ~/.ssh/work_ed25519"
+  exit 0
+fi
+exit 0
+`)
+	t.Setenv("HOME", homeDir)
+	t.Setenv("PATH", binDir)
+
+	configPath := filepath.Join(tempDir, "config.yaml")
+	if err := storage.SaveConfig(configPath, domain.Config{
+		Version: domain.CurrentConfigVersion,
+		Profiles: []domain.Profile{
+			{
+				Name:      "prod-db",
+				Type:      domain.TunnelTypeSSHLocal,
+				LocalPort: 35432,
+				SSH: &domain.SSHLocal{
+					Host:       "bastion-prod",
+					RemoteHost: "db.internal",
+					RemotePort: 5432,
+				},
+			},
+		},
+	}); err != nil {
+		t.Fatalf("save config: %v", err)
+	}
+
+	output := executeCommand(t,
+		"--config", configPath,
+		"profile", "check", "prod-db",
+	)
+
+	if !strings.Contains(output, "readiness: Warning") {
+		t.Fatalf("expected warning readiness, got %q", output)
+	}
+	if !strings.Contains(output, `warning: configured SSH identity file "~/.ssh/work_ed25519"`) {
+		t.Fatalf("expected missing identity-file warning, got %q", output)
+	}
+	if !strings.Contains(output, "hint: restore the missing private key file") {
+		t.Fatalf("expected identity-file hint, got %q", output)
+	}
+}
+
 func TestProfileCheckCommandReportsKubernetesResourceBlockers(t *testing.T) {
 	tempDir := t.TempDir()
 	binDir := filepath.Join(tempDir, "bin")

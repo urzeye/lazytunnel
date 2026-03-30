@@ -4,7 +4,9 @@ import (
 	"context"
 	"fmt"
 	"net"
+	"os"
 	"os/exec"
+	"path/filepath"
 	"strings"
 	"sync"
 	"time"
@@ -107,13 +109,14 @@ func (c *systemProfileProbeChecker) checkSSHHostAlias(host string) []string {
 
 	var warnings []string
 	inspection, output, err := c.inspectSSHHost(host)
+	resolvedBySSH := false
 	if err != nil {
 		warnings = append(warnings, fmt.Sprintf("could not verify SSH host alias %q with ssh -G: %s", host, commandOutputSummary(output, err)))
 	} else if strings.TrimSpace(inspection.HostName) != "" && !strings.EqualFold(strings.TrimSpace(inspection.HostName), host) {
-		return nil
+		resolvedBySSH = true
 	}
 
-	cfg, importResult, err := profileimport.ImportSSHConfig(domain.DefaultConfig(), "", false)
+	entry, sourcePath, exists, err := profileimport.LookupSSHConfigHost("", host)
 	if err != nil {
 		if len(warnings) > 0 {
 			return warnings
@@ -128,7 +131,12 @@ func (c *systemProfileProbeChecker) checkSSHHostAlias(host string) []string {
 		}
 	}
 
-	if hasNamedProfile(cfg.Profiles, host) {
+	if exists {
+		warnings = append(warnings, checkSSHIdentityFiles(host, entry.IdentityFiles)...)
+		return warnings
+	}
+
+	if resolvedBySSH {
 		return warnings
 	}
 
@@ -136,7 +144,7 @@ func (c *systemProfileProbeChecker) checkSSHHostAlias(host string) []string {
 		fmt.Sprintf(
 			"SSH host alias %q was not found in %s; ssh will treat it as a raw hostname",
 			host,
-			importResult.SourcePath,
+			sourcePath,
 		),
 	)
 	return warnings
@@ -176,7 +184,10 @@ func (c *systemProfileProbeChecker) checkKubernetesTarget(profile domain.Profile
 	}
 
 	if contextName == "" {
-		contextName = currentImportedKubeContext(cfg.Profiles)
+		contextName = c.currentKubectlContext()
+		if contextName == "" {
+			contextName = currentImportedKubeContext(cfg.Profiles)
+		}
 		if contextName == "" {
 			result.Warnings = append(result.Warnings, "could not determine the current kubectl context for deeper verification")
 			return result
@@ -255,6 +266,17 @@ func (c *systemProfileProbeChecker) runKubectlLookup(contextName, namespace, res
 	return string(output), err
 }
 
+func (c *systemProfileProbeChecker) currentKubectlContext() string {
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+
+	output, err := c.runner.CombinedOutput(ctx, "kubectl", []string{"config", "current-context"})
+	if err != nil {
+		return ""
+	}
+	return strings.TrimSpace(string(output))
+}
+
 type sshHostInspection struct {
 	HostName string
 }
@@ -283,6 +305,51 @@ func parseSSHHostInspection(output string) sshHostInspection {
 		}
 	}
 	return inspection
+}
+
+func checkSSHIdentityFiles(host string, identityFiles []string) []string {
+	seen := make(map[string]struct{}, len(identityFiles))
+	warnings := make([]string, 0, len(identityFiles))
+	for _, path := range identityFiles {
+		path = strings.TrimSpace(path)
+		if path == "" || strings.EqualFold(path, "none") || strings.Contains(path, "%") {
+			continue
+		}
+		if _, exists := seen[path]; exists {
+			continue
+		}
+		seen[path] = struct{}{}
+
+		resolvedPath, ok := resolveSSHIdentityPath(path)
+		if !ok {
+			continue
+		}
+		if _, err := os.Stat(resolvedPath); err == nil {
+			continue
+		} else if os.IsNotExist(err) {
+			warnings = append(warnings, fmt.Sprintf("configured SSH identity file %q for alias %q was not found on disk", path, host))
+		} else {
+			warnings = append(warnings, fmt.Sprintf("could not inspect configured SSH identity file %q for alias %q: %v", path, host, err))
+		}
+	}
+	return warnings
+}
+
+func resolveSSHIdentityPath(path string) (string, bool) {
+	if strings.HasPrefix(path, "~/") || path == "~" {
+		homeDir, err := os.UserHomeDir()
+		if err != nil {
+			return "", false
+		}
+		if path == "~" {
+			return homeDir, true
+		}
+		return filepath.Join(homeDir, strings.TrimPrefix(path, "~/")), true
+	}
+	if filepath.IsAbs(path) {
+		return path, true
+	}
+	return "", false
 }
 
 func profileProbeCacheKey(profile domain.Profile) string {

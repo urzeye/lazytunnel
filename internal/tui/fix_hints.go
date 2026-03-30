@@ -91,6 +91,10 @@ func (m Model) profileProblemFix(profile domain.Profile, problem string) string 
 		return m.t("Press e and switch Host to a real hostname, or restore the missing alias in ~/.ssh/config.", "按 e 把 Host 改成真实主机名，或者在 ~/.ssh/config 里恢复这个 alias。")
 	case strings.Contains(problem, "could not verify SSH host alias"):
 		return m.t("Check ~/.ssh/config readability, or press e and set Host to a direct hostname.", "检查 ~/.ssh/config 是否可读，或者按 e 把 Host 改成直接主机名。")
+	case strings.Contains(problem, "configured SSH identity file") && strings.Contains(problem, "was not found on disk"):
+		return m.t("Restore the missing private key, or update IdentityFile in ~/.ssh/config to a path that exists.", "恢复缺失的私钥文件，或者把 ~/.ssh/config 里的 IdentityFile 改成存在的路径。")
+	case strings.Contains(problem, "could not inspect configured SSH identity file"):
+		return m.t("Check key file permissions, or update IdentityFile in ~/.ssh/config to a readable path.", "检查密钥文件权限，或者把 ~/.ssh/config 里的 IdentityFile 改成可读取的路径。")
 	default:
 		if hasLabel(profile.Labels, "draft") {
 			return m.t("Press e to finish this draft, or press E for raw YAML editing.", "按 e 完成这个草稿，或按 E 直接编辑原始 YAML。")
