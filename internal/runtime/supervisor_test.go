@@ -117,6 +117,51 @@ func TestSupervisorRestartsWithBackoff(t *testing.T) {
 	}
 }
 
+func TestSupervisorClearLogsRemovesRecentLogHistory(t *testing.T) {
+	t.Parallel()
+
+	clock := newFakeClock(time.Date(2026, 3, 28, 10, 0, 0, 0, time.UTC))
+	supervisor := NewSupervisor(
+		&fakeProcessFactory{
+			processes: []fakeProcessPlan{
+				{
+					pid:      1001,
+					stdout:   []string{"forward ready"},
+					waitErr:  nil,
+					exitCode: 0,
+				},
+			},
+		},
+		WithNow(clock.Now),
+		WithSleep(clock.Sleep),
+	)
+
+	if err := supervisor.Start(ProcessSpec{
+		Name:    "prod-db",
+		Command: "fake-ssh",
+		Args:    []string{"-L", "5432:db.internal:5432", "bastion"},
+	}); err != nil {
+		t.Fatalf("start process: %v", err)
+	}
+
+	state := waitForStatus(t, supervisor, "prod-db", domain.TunnelStatusExited)
+	if len(state.RecentLogs) == 0 {
+		t.Fatal("expected logs before clear")
+	}
+
+	if err := supervisor.ClearLogs("prod-db"); err != nil {
+		t.Fatalf("clear logs: %v", err)
+	}
+
+	state, ok := supervisor.Snapshot("prod-db")
+	if !ok {
+		t.Fatal("expected cleared state snapshot")
+	}
+	if len(state.RecentLogs) != 0 {
+		t.Fatalf("expected logs to be cleared, got %#v", state.RecentLogs)
+	}
+}
+
 func TestSupervisorStopCancelsRunningProcess(t *testing.T) {
 	t.Parallel()
 

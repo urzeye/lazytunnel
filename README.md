@@ -183,7 +183,8 @@ Inside the TUI:
 - press `s` to seed the sample config when the workspace is empty
 - press `e` to open the guided form editor for the selected profile or stack
 - press `E` to open the raw YAML config in your external editor
-- inside the logs inspector, use `f` to follow/pause, `t` / `T` to cycle sources, `w` to wrap or truncate, and `n` / `N` to jump between filter hits
+- inside details, press `y` to copy the selected profile command, or the selected stack member command
+- inside the logs inspector, use `f` to follow/pause, `t` / `T` to cycle sources, `w` to wrap or truncate, `n` / `N` to jump between filter hits, `y` to copy visible logs, `o` to export them, and `x` to clear them
 - inside stack details, use `[` / `]` to pick a member, `S` to start or stop it, `R` to restart it, and `p` to open that member profile
 - inside the stack form editor, use `,` or paste comma/newline-separated profile names to expand member rows, `+` to add a member below the current row, `Ctrl+X` to remove it, and `[` / `]` to reorder members
 

@@ -280,6 +280,8 @@ type Model struct {
 	configPath          string
 	subscriptionID      int
 	events              <-chan ltruntime.Event
+	clipboardWriter     func(string) error
+	textExporter        func(string, string) (string, error)
 	selectedProfile     int
 	selectedStack       int
 	focus               listFocus
@@ -673,6 +675,7 @@ func (m Model) hintMessage() string {
 			m.t("h/l details/logs", "h/l 详情/日志"),
 			m.inlineToggleHint(),
 			m.inlineRestartHint(),
+			m.inlineCommandCopyHint(),
 			m.inlineLogNavigationHint(),
 			m.t("c clone profile", "c 克隆配置"),
 			m.t("i import drafts", "i 导入草稿"),
@@ -692,6 +695,7 @@ func (m Model) hintMessage() string {
 			m.inlineToggleHint(),
 			m.inlineRestartHint(),
 			m.inlineStackMemberHint(),
+			m.inlineCommandCopyHint(),
 			m.inlineLogNavigationHint(),
 			m.t("c clone stack", "c 克隆组合"),
 			m.t("i import drafts", "i 导入草稿"),
@@ -711,6 +715,7 @@ func (m Model) hintMessage() string {
 			m.t("h/l details/logs", "h/l 详情/日志"),
 			m.inlineToggleHint(),
 			m.inlineRestartHint(),
+			m.inlineCommandCopyHint(),
 			m.inlineLogNavigationHint(),
 			m.t("c clone profile", "c 克隆配置"),
 			m.t("i import drafts", "i 导入草稿"),
@@ -792,7 +797,7 @@ func (m Model) inlineLogNavigationHint() string {
 	if m.inspectorTab != inspectorTabLogs {
 		return ""
 	}
-	return m.t("f follow/pause • t/T source • w wrap • n/N hits • Home latest • End oldest", "f 跟随/暂停 • t/T 来源 • w 换行 • n/N 命中 • Home 最新 • End 最旧")
+	return m.t("f follow/pause • t/T source • w wrap • n/N hits • y copy • o export • x clear • Home latest • End oldest", "f 跟随/暂停 • t/T 来源 • w 换行 • n/N 命中 • y 复制 • o 导出 • x 清空 • Home 最新 • End 最旧")
 }
 
 func (m Model) inlineStackMemberHint() string {
@@ -810,6 +815,24 @@ func (m Model) inlineStackMemberHint() string {
 	}
 
 	return m.t("[/] select member • S toggle member • R restart member • p open member", "[/] 选择成员 • S 启停成员 • R 重启成员 • p 打开成员")
+}
+
+func (m Model) inlineCommandCopyHint() string {
+	if m.inspectorTab != inspectorTabDetails {
+		return ""
+	}
+
+	normalized, profiles, stacks := m.currentHintViews()
+	if normalized.focus == focusStacks && len(stacks) > 0 {
+		selected := stacks[max(0, min(normalized.selectedStack, len(stacks)-1))]
+		if len(selected.Members) > 0 {
+			return m.t("y copy member command", "y 复制成员命令")
+		}
+	}
+	if len(profiles) > 0 {
+		return m.t("y copy command", "y 复制命令")
+	}
+	return ""
 }
 
 func (m Model) currentHintViews() (Model, []app.ProfileView, []app.StackView) {
@@ -1078,6 +1101,9 @@ func (m Model) renderProfileDetailLines(view app.ProfileView, width int) []strin
 	}
 
 	lines = append(lines, m.renderProfileStartLines(view, specErr, width)...)
+	lines = append(lines, m.renderProfileDraftGuideLines(view, width)...)
+	lines = append(lines, m.renderProfileFailureLines(view, width)...)
+	lines = append(lines, m.renderProfileRuntimeHistoryLines(view, width)...)
 
 	configLines := make([]string, 0, 4)
 	if view.Profile.Description != "" {
@@ -1146,6 +1172,9 @@ func (m Model) renderStackDetailContent(view app.StackView, width int) ([]string
 	}
 
 	lines = append(lines, m.renderStackStartLines(view, width)...)
+	lines = append(lines, m.renderStackDraftGuideLines(view, width)...)
+	lines = append(lines, m.renderStackFailureLines(view, width)...)
+	lines = append(lines, m.renderStackRuntimeHistoryLines(view, width)...)
 
 	if missingProfiles := missingStackProfiles(view); len(missingProfiles) > 0 {
 		lines = append(lines, groupTitleStyle.Render(m.t("Problem", "问题")))
@@ -2153,6 +2182,28 @@ func (m Model) handleInspectorKey(msg tea.KeyMsg, profiles []app.ProfileView, st
 			return m, false
 		}
 		m = m.navigateLogMatches(content, -1)
+		return m, true
+	case "y":
+		if m.inspectorTab == inspectorTabLogs {
+			m = m.copyVisibleLogs(profiles, stacks)
+			return m, true
+		}
+		if m.inspectorTab == inspectorTabDetails {
+			m = m.copySelectedExecCommand(profiles, stacks)
+			return m, true
+		}
+		return m, false
+	case "o", "O":
+		if m.inspectorTab != inspectorTabLogs {
+			return m, false
+		}
+		m = m.exportVisibleLogs(profiles, stacks)
+		return m, true
+	case "x", "X":
+		if m.inspectorTab != inspectorTabLogs {
+			return m, false
+		}
+		m = m.clearVisibleLogs(profiles, stacks)
 		return m, true
 	case "[":
 		if m.focus != focusStacks || m.inspectorTab != inspectorTabDetails {
@@ -3458,6 +3509,7 @@ func (m Model) profileActionLines(view app.ProfileView, width int) []string {
 	return []string{
 		renderActionLine("Enter", toggleLabel, width),
 		renderActionLine("r", m.t("restart tunnel", "重启隧道"), width),
+		renderActionLine("y", m.t("copy exec command", "复制执行命令"), width),
 		renderActionLine("c", m.t("clone profile draft", "克隆配置草稿"), width),
 		renderActionLine("A", m.t("create stack draft from profile", "从配置创建组合草稿"), width),
 		renderActionLine("e", m.t("edit selected profile in form", "在表单里编辑当前配置"), width),
@@ -3476,6 +3528,7 @@ func (m Model) stackActionLines(view app.StackView, width int) []string {
 	lines := []string{
 		renderActionLine("Enter", toggleLabel, width),
 		renderActionLine("r", m.t("restart stack", "重启组合"), width),
+		renderActionLine("y", m.t("copy selected member command", "复制当前成员命令"), width),
 		renderActionLine("c", m.t("clone stack draft", "克隆组合草稿"), width),
 		renderActionLine("A", m.t("create another stack draft", "再创建一个组合草稿"), width),
 		renderActionLine("e", m.t("edit selected stack in form", "在表单里编辑当前组合"), width),

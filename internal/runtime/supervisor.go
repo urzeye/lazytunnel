@@ -157,6 +157,27 @@ func (s *Supervisor) Stop(name string) error {
 	return nil
 }
 
+func (s *Supervisor) ClearLogs(name string) error {
+	s.mu.Lock()
+	process, exists := s.processes[name]
+	if !exists {
+		s.mu.Unlock()
+		return fmt.Errorf("process %q not found", name)
+	}
+
+	process.state.RecentLogs = nil
+	stateSnapshot := process.state.Clone()
+	subscribers := s.snapshotSubscribersLocked()
+	s.mu.Unlock()
+
+	s.publish(subscribers, Event{
+		Type:  EventTypeStateChanged,
+		Name:  name,
+		State: stateSnapshot,
+	})
+	return nil
+}
+
 func (s *Supervisor) Snapshot(name string) (domain.RuntimeState, bool) {
 	s.mu.RLock()
 	defer s.mu.RUnlock()

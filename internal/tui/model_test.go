@@ -277,6 +277,321 @@ func TestRenderStackDetailLinesShowsWarningMembers(t *testing.T) {
 	}
 }
 
+func TestRenderProfileDetailLinesShowsRecentFailureSignals(t *testing.T) {
+	t.Parallel()
+
+	service, err := app.NewService(domain.Config{
+		Version: domain.CurrentConfigVersion,
+		Profiles: []domain.Profile{
+			{
+				Name:      "prod-db",
+				Type:      domain.TunnelTypeSSHLocal,
+				LocalPort: 15432,
+				SSH: &domain.SSHLocal{
+					Host:       "bastion-prod",
+					RemoteHost: "db.internal",
+					RemotePort: 5432,
+				},
+			},
+		},
+	}, newStubRuntimeController())
+	if err != nil {
+		t.Fatalf("new service: %v", err)
+	}
+
+	model := Model{service: service}
+	lines := model.renderProfileDetailLines(app.ProfileView{
+		Profile: service.ProfileViews()[0].Profile,
+		State: domain.RuntimeState{
+			ProfileName:  "prod-db",
+			Status:       domain.TunnelStatusRestarting,
+			LastError:    "dial tcp timeout",
+			LastExitCode: 255,
+			RecentLogs: []domain.LogEntry{
+				{Timestamp: time.Date(2026, 3, 30, 10, 0, 0, 0, time.UTC), Source: domain.LogSourceStderr, Message: "dial tcp timeout"},
+				{Timestamp: time.Date(2026, 3, 30, 10, 0, 1, 0, time.UTC), Source: domain.LogSourceSystem, Message: "restarting in 4s"},
+			},
+		},
+	}, 100)
+
+	rendered := strings.Join(lines, "\n")
+	for _, snippet := range []string{"Recent Failure", "dial tcp timeout", "restarting in 4s"} {
+		if !strings.Contains(rendered, snippet) {
+			t.Fatalf("expected %q in recent-failure section, got %q", snippet, rendered)
+		}
+	}
+}
+
+func TestRenderProfileDetailLinesShowsRecentRuntimeHistory(t *testing.T) {
+	t.Parallel()
+
+	service, err := app.NewService(domain.Config{
+		Version: domain.CurrentConfigVersion,
+		Profiles: []domain.Profile{
+			{
+				Name:      "prod-db",
+				Type:      domain.TunnelTypeSSHLocal,
+				LocalPort: 15432,
+				SSH: &domain.SSHLocal{
+					Host:       "bastion-prod",
+					RemoteHost: "db.internal",
+					RemotePort: 5432,
+				},
+			},
+		},
+	}, newStubRuntimeController())
+	if err != nil {
+		t.Fatalf("new service: %v", err)
+	}
+
+	base := time.Date(2026, 3, 30, 10, 0, 0, 0, time.UTC)
+	model := Model{service: service}
+	lines := model.renderProfileDetailLines(app.ProfileView{
+		Profile: service.ProfileViews()[0].Profile,
+		State: domain.RuntimeState{
+			ProfileName: "prod-db",
+			Status:      domain.TunnelStatusRestarting,
+			RecentLogs: []domain.LogEntry{
+				{Timestamp: base.Add(-3 * time.Second), Source: domain.LogSourceSystem, Message: "starting command: ssh -L 15432:db.internal:5432 bastion-prod"},
+				{Timestamp: base.Add(-2 * time.Second), Source: domain.LogSourceSystem, Message: "process started with pid 1234"},
+				{Timestamp: base.Add(-1 * time.Second), Source: domain.LogSourceSystem, Message: "process exited with code 255"},
+				{Timestamp: base, Source: domain.LogSourceSystem, Message: "restarting in 4s"},
+			},
+		},
+	}, 100)
+
+	rendered := strings.Join(lines, "\n")
+	for _, snippet := range []string{"Recent Runtime", "process started with pid 1234", "process exited with code 255", "restarting in 4s"} {
+		if !strings.Contains(rendered, snippet) {
+			t.Fatalf("expected %q in recent runtime section, got %q", snippet, rendered)
+		}
+	}
+}
+
+func TestRenderProfileDetailLinesShowsDraftGuideForImportedDraft(t *testing.T) {
+	t.Parallel()
+
+	service, err := app.NewService(domain.Config{
+		Version: domain.CurrentConfigVersion,
+		Profiles: []domain.Profile{
+			{
+				Name:        "bastion-prod",
+				Description: "Imported from ~/.ssh/config.",
+				Type:        domain.TunnelTypeSSHLocal,
+				LocalPort:   15432,
+				Labels:      []string{"draft", "imported", "ssh-config"},
+				SSH: &domain.SSHLocal{
+					Host:       "bastion-prod",
+					RemoteHost: "127.0.0.1",
+					RemotePort: 80,
+				},
+			},
+		},
+	}, newStubRuntimeController())
+	if err != nil {
+		t.Fatalf("new service: %v", err)
+	}
+
+	model := Model{service: service}
+	rendered := strings.Join(model.renderProfileDetailLines(service.ProfileViews()[0], 100), "\n")
+	for _, snippet := range []string{"Draft Guide", "Remote Host", "~/.ssh/config"} {
+		if !strings.Contains(rendered, snippet) {
+			t.Fatalf("expected %q in draft guide, got %q", snippet, rendered)
+		}
+	}
+}
+
+func TestRenderStackDetailLinesAggregateFailureReasons(t *testing.T) {
+	t.Parallel()
+
+	cfg := domain.Config{
+		Version: domain.CurrentConfigVersion,
+		Profiles: []domain.Profile{
+			{
+				Name:      "api-debug",
+				Type:      domain.TunnelTypeKubernetesPortForward,
+				LocalPort: 8080,
+				Kubernetes: &domain.Kubernetes{
+					Context:      "dev-cluster",
+					Namespace:    "backend",
+					ResourceType: "service",
+					Resource:     "api",
+					RemotePort:   80,
+				},
+			},
+			{
+				Name:      "worker-debug",
+				Type:      domain.TunnelTypeSSHLocal,
+				LocalPort: 15433,
+				SSH: &domain.SSHLocal{
+					Host:       "bastion-dev",
+					RemoteHost: "worker.internal",
+					RemotePort: 9000,
+				},
+			},
+		},
+		Stacks: []domain.Stack{
+			{
+				Name:     "backend-dev",
+				Profiles: []string{"api-debug", "worker-debug"},
+			},
+		},
+	}
+
+	service, err := app.NewService(cfg, newStubRuntimeController())
+	if err != nil {
+		t.Fatalf("new service: %v", err)
+	}
+
+	model := Model{service: service}
+	lines := model.renderStackDetailLines(app.StackView{
+		Stack: cfg.Stacks[0],
+		Members: []app.ProfileView{
+			{
+				Profile: cfg.Profiles[0],
+				State: domain.RuntimeState{
+					ProfileName: "api-debug",
+					Status:      domain.TunnelStatusFailed,
+					LastError:   "dial tcp timeout",
+				},
+			},
+			{
+				Profile: cfg.Profiles[1],
+				State: domain.RuntimeState{
+					ProfileName: "worker-debug",
+					Status:      domain.TunnelStatusFailed,
+					ExitReason:  "dial tcp timeout",
+					RecentLogs: []domain.LogEntry{
+						{Timestamp: time.Date(2026, 3, 30, 10, 0, 2, 0, time.UTC), Source: domain.LogSourceSystem, Message: "restarting in 3s"},
+					},
+				},
+			},
+		},
+	}, 120)
+
+	rendered := strings.Join(lines, "\n")
+	for _, snippet := range []string{"Recent Failures", "dial tcp timeout", "2 members", "restarting in 3s"} {
+		if !strings.Contains(rendered, snippet) {
+			t.Fatalf("expected %q in stack failure aggregation, got %q", snippet, rendered)
+		}
+	}
+}
+
+func TestRenderStackDetailLinesShowsRecentRuntimeHistory(t *testing.T) {
+	t.Parallel()
+
+	cfg := domain.Config{
+		Version: domain.CurrentConfigVersion,
+		Profiles: []domain.Profile{
+			{
+				Name:      "api-debug",
+				Type:      domain.TunnelTypeKubernetesPortForward,
+				LocalPort: 8080,
+				Kubernetes: &domain.Kubernetes{
+					Context:      "dev-cluster",
+					Namespace:    "backend",
+					ResourceType: "service",
+					Resource:     "api",
+					RemotePort:   80,
+				},
+			},
+			{
+				Name:      "worker-debug",
+				Type:      domain.TunnelTypeSSHLocal,
+				LocalPort: 15433,
+				SSH: &domain.SSHLocal{
+					Host:       "bastion-dev",
+					RemoteHost: "worker.internal",
+					RemotePort: 9000,
+				},
+			},
+		},
+		Stacks: []domain.Stack{
+			{
+				Name:     "backend-dev",
+				Profiles: []string{"api-debug", "worker-debug"},
+			},
+		},
+	}
+
+	service, err := app.NewService(cfg, newStubRuntimeController())
+	if err != nil {
+		t.Fatalf("new service: %v", err)
+	}
+
+	base := time.Date(2026, 3, 30, 10, 0, 0, 0, time.UTC)
+	model := Model{service: service}
+	lines := model.renderStackDetailLines(app.StackView{
+		Stack: cfg.Stacks[0],
+		Members: []app.ProfileView{
+			{
+				Profile: cfg.Profiles[0],
+				State: domain.RuntimeState{
+					ProfileName: "api-debug",
+					RecentLogs: []domain.LogEntry{
+						{Timestamp: base.Add(-1 * time.Second), Source: domain.LogSourceSystem, Message: "process exited with code 255"},
+					},
+				},
+			},
+			{
+				Profile: cfg.Profiles[1],
+				State: domain.RuntimeState{
+					ProfileName: "worker-debug",
+					RecentLogs: []domain.LogEntry{
+						{Timestamp: base, Source: domain.LogSourceSystem, Message: "retrying after launch failure in 2s"},
+					},
+				},
+			},
+		},
+	}, 120)
+
+	rendered := strings.Join(lines, "\n")
+	for _, snippet := range []string{"Recent Runtime", "api-debug", "worker-debug", "process exited with code 255", "retrying after launch failure in 2s"} {
+		if !strings.Contains(rendered, snippet) {
+			t.Fatalf("expected %q in stack recent runtime section, got %q", snippet, rendered)
+		}
+	}
+}
+
+func TestRenderStackDetailLinesShowsDraftGuide(t *testing.T) {
+	t.Parallel()
+
+	cfg := domain.Config{
+		Version: domain.CurrentConfigVersion,
+		Profiles: []domain.Profile{
+			{
+				Name:      "prod-db",
+				Type:      domain.TunnelTypeSSHLocal,
+				LocalPort: 15432,
+				SSH: &domain.SSHLocal{
+					Host:       "bastion-prod",
+					RemoteHost: "db.internal",
+					RemotePort: 5432,
+				},
+			},
+		},
+		Stacks: []domain.Stack{
+			{
+				Name:   "draft-stack",
+				Labels: []string{"draft"},
+			},
+		},
+	}
+
+	service, err := app.NewService(cfg, newStubRuntimeController())
+	if err != nil {
+		t.Fatalf("new service: %v", err)
+	}
+
+	model := Model{service: service}
+	rendered := strings.Join(model.renderStackDetailLines(service.StackViews()[0], 120), "\n")
+	for _, snippet := range []string{"Draft Guide", "Member 1", "comma/newline-separated"} {
+		if !strings.Contains(rendered, snippet) {
+			t.Fatalf("expected %q in stack draft guide, got %q", snippet, rendered)
+		}
+	}
+}
+
 func TestRenderProfileDetailLinesUsesChineseWhenConfigured(t *testing.T) {
 	t.Parallel()
 
@@ -1190,6 +1505,115 @@ func TestHandleInspectorKeyManagesLogFollowPauseAndSourceFilter(t *testing.T) {
 	}
 	if next.logSourceFilter != domain.LogSourceSystem {
 		t.Fatalf("expected first source cycle to choose system logs, got %q", next.logSourceFilter)
+	}
+}
+
+func TestHandleInspectorKeyUsesYToCopyExecCommand(t *testing.T) {
+	t.Parallel()
+
+	service, err := app.NewService(storage.SampleConfig(), newStubRuntimeController())
+	if err != nil {
+		t.Fatalf("new service: %v", err)
+	}
+
+	var copied string
+	model := Model{
+		service:         service,
+		clipboardWriter: func(text string) error { copied = text; return nil },
+	}
+	profiles := filterProfileViews(service.ProfileViews(), "")
+	stacks := filterStackViews(service.StackViews(), "")
+
+	next, handled := model.handleInspectorKey(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'y'}}, profiles, stacks)
+	if !handled {
+		t.Fatal("expected y to copy the current exec command")
+	}
+	if !strings.Contains(copied, "ssh ") || !strings.Contains(copied, "-L") {
+		t.Fatalf("expected copied ssh local command, got %q", copied)
+	}
+	if !strings.Contains(next.lastNotice, "Copied exec command") {
+		t.Fatalf("expected copy-command notice, got %q", next.lastNotice)
+	}
+}
+
+func TestHandleInspectorKeyLogActionsCopyExportAndClear(t *testing.T) {
+	t.Parallel()
+
+	runtime := newStubRuntimeController()
+	runtime.states["prod-db"] = domain.RuntimeState{
+		ProfileName: "prod-db",
+		Status:      domain.TunnelStatusRunning,
+		RecentLogs: []domain.LogEntry{
+			{Timestamp: time.Date(2026, 3, 30, 10, 0, 0, 0, time.UTC), Source: domain.LogSourceStdout, Message: "server ready"},
+			{Timestamp: time.Date(2026, 3, 30, 10, 0, 1, 0, time.UTC), Source: domain.LogSourceStderr, Message: "dial tcp timeout"},
+		},
+	}
+
+	cfg := domain.Config{
+		Version: domain.CurrentConfigVersion,
+		Profiles: []domain.Profile{
+			{
+				Name:      "prod-db",
+				Type:      domain.TunnelTypeSSHLocal,
+				LocalPort: 15432,
+				SSH: &domain.SSHLocal{
+					Host:       "bastion-prod",
+					RemoteHost: "db.internal",
+					RemotePort: 5432,
+				},
+			},
+		},
+	}
+
+	service, err := app.NewService(cfg, runtime)
+	if err != nil {
+		t.Fatalf("new service: %v", err)
+	}
+
+	var copied string
+	var exportedBase string
+	var exportedContent string
+	model := Model{
+		service:         service,
+		inspectorTab:    inspectorTabLogs,
+		clipboardWriter: func(text string) error { copied = text; return nil },
+		textExporter: func(baseName, content string) (string, error) {
+			exportedBase = baseName
+			exportedContent = content
+			return "/tmp/prod-db.log", nil
+		},
+	}
+	profiles := filterProfileViews(service.ProfileViews(), "")
+	stacks := filterStackViews(service.StackViews(), "")
+
+	next, handled := model.handleInspectorKey(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'y'}}, profiles, stacks)
+	if !handled {
+		t.Fatal("expected y to copy visible logs")
+	}
+	if !strings.Contains(copied, "server ready") || !strings.Contains(copied, "dial tcp timeout") {
+		t.Fatalf("expected copied log snapshot, got %q", copied)
+	}
+
+	next, handled = next.handleInspectorKey(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'o'}}, profiles, stacks)
+	if !handled {
+		t.Fatal("expected o to export visible logs")
+	}
+	if exportedBase != "prod-db" {
+		t.Fatalf("expected exported base name prod-db, got %q", exportedBase)
+	}
+	if !strings.Contains(exportedContent, "server ready") {
+		t.Fatalf("expected exported logs to include content, got %q", exportedContent)
+	}
+
+	next, handled = next.handleInspectorKey(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'x'}}, profiles, stacks)
+	if !handled {
+		t.Fatal("expected x to clear visible logs")
+	}
+	if got := len(runtime.states["prod-db"].RecentLogs); got != 0 {
+		t.Fatalf("expected logs to be cleared, got %d", got)
+	}
+	if !strings.Contains(next.lastNotice, "Cleared logs for profile prod-db.") {
+		t.Fatalf("expected clear-logs notice, got %q", next.lastNotice)
 	}
 }
 
@@ -3061,6 +3485,7 @@ func TestConfirmDeletePersistsProfileRemoval(t *testing.T) {
 type stubRuntimeController struct {
 	states        map[string]domain.RuntimeState
 	stoppedNames  []string
+	clearedLogs   []string
 	subscriptions map[int]chan ltruntime.Event
 }
 
@@ -3086,6 +3511,17 @@ func (s *stubRuntimeController) Stop(name string) error {
 		ProfileName: name,
 		Status:      domain.TunnelStatusStopped,
 	}
+	return nil
+}
+
+func (s *stubRuntimeController) ClearLogs(name string) error {
+	s.clearedLogs = append(s.clearedLogs, name)
+	state, exists := s.states[name]
+	if !exists {
+		return nil
+	}
+	state.RecentLogs = nil
+	s.states[name] = state
 	return nil
 }
 

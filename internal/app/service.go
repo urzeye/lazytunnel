@@ -14,6 +14,7 @@ import (
 type RuntimeController interface {
 	Start(spec ltruntime.ProcessSpec) error
 	Stop(name string) error
+	ClearLogs(name string) error
 	Snapshot(name string) (domain.RuntimeState, bool)
 	ListStates() []domain.RuntimeState
 	Subscribe(buffer int) (int, <-chan ltruntime.Event)
@@ -348,6 +349,34 @@ func (s *Service) RestartStack(name string) error {
 	}
 
 	return s.StartStack(name)
+}
+
+func (s *Service) ClearProfileLogs(name string) error {
+	if _, err := s.profile(name); err != nil {
+		return err
+	}
+	if _, exists := s.supervisor.Snapshot(name); !exists {
+		return nil
+	}
+	return s.supervisor.ClearLogs(name)
+}
+
+func (s *Service) ClearStackLogs(name string) error {
+	stack, err := s.stack(name)
+	if err != nil {
+		return err
+	}
+
+	var errs []error
+	for _, profileName := range stack.Profiles {
+		if _, exists := s.supervisor.Snapshot(profileName); !exists {
+			continue
+		}
+		if err := s.supervisor.ClearLogs(profileName); err != nil {
+			errs = append(errs, fmt.Errorf("profile %q: %w", profileName, err))
+		}
+	}
+	return errors.Join(errs...)
 }
 
 func (s *Service) AnalyzeProfileStart(name string) (ProfileStartAnalysis, error) {

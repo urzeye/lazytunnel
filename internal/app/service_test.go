@@ -873,6 +873,16 @@ func (f *fakeRuntimeController) Stop(name string) error {
 	return nil
 }
 
+func (f *fakeRuntimeController) ClearLogs(name string) error {
+	state, exists := f.statesByName[name]
+	if !exists {
+		return nil
+	}
+	state.RecentLogs = nil
+	f.statesByName[name] = state
+	return nil
+}
+
 func (f *fakeRuntimeController) Snapshot(name string) (domain.RuntimeState, bool) {
 	state, ok := f.statesByName[name]
 	return state, ok
