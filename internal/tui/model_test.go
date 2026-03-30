@@ -128,6 +128,9 @@ func TestRenderProfileDetailLinesShowsConfigProblem(t *testing.T) {
 	if !strings.Contains(rendered, "ssh settings are required") {
 		t.Fatalf("expected config validation message, got %q", rendered)
 	}
+	if !strings.Contains(rendered, "Fix") || !strings.Contains(rendered, "Press e") {
+		t.Fatalf("expected actionable fix hint, got %q", rendered)
+	}
 }
 
 func TestRenderStackDetailLinesShowsMissingProfiles(t *testing.T) {
@@ -173,6 +176,9 @@ func TestRenderStackDetailLinesShowsMissingProfiles(t *testing.T) {
 	}
 	if !strings.Contains(rendered, "missing-api") {
 		t.Fatalf("expected missing profile name, got %q", rendered)
+	}
+	if !strings.Contains(rendered, "remove or replace missing member") {
+		t.Fatalf("expected missing-profile fix hint, got %q", rendered)
 	}
 }
 
@@ -278,7 +284,7 @@ func TestRenderEmptyProfilesLinesIncludesAllActions(t *testing.T) {
 	lines := model.renderEmptyProfilesLines(48)
 	rendered := strings.Join(lines, "\n")
 
-	for _, snippet := range []string{"import drafts", "sample config", "draft profile", "edit config", "reload config"} {
+	for _, snippet := range []string{"import drafts", "sample config", "draft profile", "guided editor", "raw YAML", "reload config"} {
 		if !strings.Contains(rendered, snippet) {
 			t.Fatalf("expected %q in empty profiles lines, got %q", snippet, rendered)
 		}
@@ -1044,6 +1050,9 @@ func TestCreateStarterProfileDraftPersistsAndSelects(t *testing.T) {
 	if !strings.Contains(model.lastNotice, "Created starter profile") {
 		t.Fatalf("expected creation notice, got %q", model.lastNotice)
 	}
+	if model.editor == nil || model.editor.kind != formEditorProfile {
+		t.Fatalf("expected profile editor to open, got %#v", model.editor)
+	}
 
 	views := model.service.ProfileViews()
 	if len(views) != 1 {
@@ -1089,6 +1098,9 @@ func TestCreateStarterStackDraftPersistsAndSelects(t *testing.T) {
 	}
 	if !strings.Contains(model.lastNotice, "Created starter stack") {
 		t.Fatalf("expected creation notice, got %q", model.lastNotice)
+	}
+	if model.editor == nil || model.editor.kind != formEditorStack {
+		t.Fatalf("expected stack editor to open, got %#v", model.editor)
 	}
 
 	stackViews := model.service.StackViews()
@@ -1610,6 +1622,65 @@ func TestHandleWorkspaceKeyUsesSForSampleConfigWhenEmpty(t *testing.T) {
 	}
 	if got := len(next.service.ProfileViews()); got != 2 {
 		t.Fatalf("expected sample config to create 2 profiles, got %d", got)
+	}
+}
+
+func TestHandleWorkspaceKeyUsesEForFormEditor(t *testing.T) {
+	t.Parallel()
+
+	service, err := app.NewService(storage.SampleConfig(), newStubRuntimeController())
+	if err != nil {
+		t.Fatalf("new service: %v", err)
+	}
+
+	model := Model{service: service}
+	profiles := filterProfileViews(service.ProfileViews(), "")
+	stacks := filterStackViews(service.StackViews(), "")
+	next, _, handled := model.handleWorkspaceKey(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'e'}}, profiles, stacks)
+	if !handled {
+		t.Fatal("expected e form-edit key to be handled")
+	}
+	if next.editor == nil || next.editor.kind != formEditorProfile {
+		t.Fatalf("expected profile editor to open, got %#v", next.editor)
+	}
+}
+
+func TestSaveProfileEditorPersistsUpdatedFields(t *testing.T) {
+	t.Parallel()
+
+	configPath := filepath.Join(t.TempDir(), "config.yaml")
+	service, err := app.NewService(domain.DefaultConfig(), newStubRuntimeController())
+	if err != nil {
+		t.Fatalf("new service: %v", err)
+	}
+
+	model := Model{
+		service:    service,
+		configPath: configPath,
+	}
+	model = model.createStarterProfileDraft()
+	model.editor.values[editorFieldHost] = "bastion-staging"
+	model.editor.values[editorFieldRemoteHost] = "staging-db.internal"
+	model.editor.values[editorFieldRemotePort] = "15432"
+
+	model = model.saveActiveEditor()
+
+	if model.lastError != "" {
+		t.Fatalf("expected no error after save, got %q", model.lastError)
+	}
+	if model.editor != nil {
+		t.Fatalf("expected editor to close after save, got %#v", model.editor)
+	}
+
+	cfg, err := storage.LoadConfig(configPath)
+	if err != nil {
+		t.Fatalf("load config: %v", err)
+	}
+	if len(cfg.Profiles) != 1 {
+		t.Fatalf("expected 1 profile, got %d", len(cfg.Profiles))
+	}
+	if cfg.Profiles[0].SSH == nil || cfg.Profiles[0].SSH.Host != "bastion-staging" || cfg.Profiles[0].SSH.RemoteHost != "staging-db.internal" {
+		t.Fatalf("unexpected saved profile: %#v", cfg.Profiles[0])
 	}
 }
 

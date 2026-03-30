@@ -137,6 +137,13 @@ lazytunnel profile edit staging-db \
   --label db
 ```
 
+也可以直接走交互式编辑：
+
+```bash
+lazytunnel profile edit staging-db --interactive
+lazytunnel stack edit backend-dev --interactive
+```
+
 从现有 `~/.ssh/config` 导入 draft profile：
 
 ```bash
@@ -158,7 +165,8 @@ lazytunnel profile import kube-contexts --kubeconfig ~/.kube/config --overwrite
 
 导入后的 profile 会以可编辑草稿的形式写入配置。SSH 导入会先放一个占位转发目标，
 Kubernetes 导入会先放一个占位资源目标，所以通常还需要再改一遍配置再连接。
-如果你已经打开了 TUI，导入完成后按 `g` 重新加载配置即可看到新条目。
+在 TUI 里，按 `e` 可以直接用内置表单完善当前选中的草稿，按 `E` 则跳到原始 YAML。
+如果你已经打开了 TUI，而且是从 CLI 发起导入，导入完成后按 `g` 重新加载配置即可看到新条目。
 
 校验当前配置：
 
@@ -176,6 +184,8 @@ lazytunnel
 
 - 按 `i` 打开导入提示，可从 `~/.ssh/config`、Kubernetes context，或两者一起导入
 - 当工作区为空时，按 `s` 写入示例配置
+- 按 `e` 用引导式表单编辑当前选中的 profile / stack
+- 按 `E` 在外部编辑器里打开原始 YAML 配置
 
 ## 核心能力
 
@@ -187,7 +197,9 @@ LazyTunnel 围绕几个高频场景来设计：
 - 把多条 tunnel 组合成一个 stack，按项目批量启动
 - 按名称、标签、目标和端口快速过滤 profile / stack
 - 通过 CLI 或 TUI 从 `~/.ssh/config` 和 kubeconfig context 导入 draft profile
+- 通过 TUI 内置表单或 `profile edit --interactive` 继续完善导入草稿
 - 在启动前识别本地端口冲突
+- 校验失败时给出下一步可执行的修复提示
 - 通过 CLI 完成 profile / stack 的新增、复制、修改和删除管理
 - 直接在 TUI 里带确认地删除 profile / stack
 - 直接在 TUI 里切换英文和简体中文

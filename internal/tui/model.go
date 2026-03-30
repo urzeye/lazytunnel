@@ -275,6 +275,7 @@ type Model struct {
 	inspectorScroll int
 	lastNotice      string
 	lastError       string
+	editor          *formEditorState
 }
 
 func NewModel(service *app.Service, configPath string) Model {
@@ -316,6 +317,10 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		return m, nil
 
 	case tea.MouseMsg:
+		if m.editor != nil {
+			return m, nil
+		}
+
 		profiles := filterProfileViews(m.service.ProfileViews(), m.filterQuery)
 		stacks := filterStackViews(m.service.StackViews(), m.filterQuery)
 		m = m.normalizeSelection(len(profiles), len(stacks))
@@ -330,6 +335,15 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		profiles := filterProfileViews(m.service.ProfileViews(), m.filterQuery)
 		stacks := filterStackViews(m.service.StackViews(), m.filterQuery)
 		m = m.normalizeSelection(len(profiles), len(stacks))
+
+		if m.editor != nil {
+			var handled bool
+			var cmd tea.Cmd
+			m, cmd, handled = m.handleEditorKey(msg)
+			if handled {
+				return m, cmd
+			}
+		}
 
 		if m.pendingDelete != nil {
 			var handled bool
@@ -559,6 +573,8 @@ func (m Model) renderHintLine(width int) string {
 
 func (m Model) hintMessage() string {
 	switch {
+	case m.editor != nil:
+		return m.t("Form editor: edit the selected fields here. Enter saves, Esc cancels, and E opens the raw YAML editor.", "表单编辑中: 直接在这里修改字段。Enter 保存，Esc 取消，E 打开原始 YAML 编辑器。")
 	case m.pendingDelete != nil:
 		return m.t("Delete mode: y or Enter confirms. n or Esc cancels.", "删除模式: y 或 Enter 确认，n 或 Esc 取消。")
 	case m.importMode:
@@ -573,7 +589,8 @@ func (m Model) hintMessage() string {
 			m.t("i import drafts", "i 导入草稿"),
 			m.t("s sample config", "s 示例配置"),
 			m.t("a new tunnel draft", "a 新建隧道草稿"),
-			m.t("e edit config", "e 编辑配置"),
+			m.t("e guided editor", "e 引导式表单"),
+			m.t("E raw YAML", "E 原始 YAML"),
 			m.t("g reload config", "g 重新加载配置"),
 			m.t("L switch language", "L 切换语言"),
 			m.inlineFilterHint(),
@@ -588,7 +605,8 @@ func (m Model) hintMessage() string {
 		return joinHintParts(
 			m.t("i import drafts", "i 导入草稿"),
 			m.t("a new tunnel draft", "a 新建隧道草稿"),
-			m.t("e edit config", "e 编辑配置"),
+			m.t("e guided editor", "e 引导式表单"),
+			m.t("E raw YAML", "E 原始 YAML"),
 			m.t("g reload config", "g 重新加载配置"),
 			m.t("L switch language", "L 切换语言"),
 			m.inlineFilterHint(),
@@ -604,7 +622,8 @@ func (m Model) hintMessage() string {
 			m.t("c clone profile", "c 克隆配置"),
 			m.t("i import drafts", "i 导入草稿"),
 			m.t("A new stack draft", "A 新建组合草稿"),
-			m.t("e edit config", "e 编辑配置"),
+			m.t("e edit selected", "e 编辑当前项"),
+			m.t("E raw YAML", "E 原始 YAML"),
 			m.t("g reload config", "g 重新加载配置"),
 			m.inlineFilterHint(),
 			m.t("q quit", "q 退出"),
@@ -622,6 +641,8 @@ func (m Model) hintMessage() string {
 			m.t("i import drafts", "i 导入草稿"),
 			m.t("A new stack draft", "A 新建组合草稿"),
 			m.t("d delete stack", "d 删除组合"),
+			m.t("e edit selected", "e 编辑当前项"),
+			m.t("E raw YAML", "E 原始 YAML"),
 			m.t("g reload config", "g 重新加载配置"),
 			m.inlineFilterHint(),
 			m.t("q quit", "q 退出"),
@@ -638,6 +659,8 @@ func (m Model) hintMessage() string {
 			m.t("i import drafts", "i 导入草稿"),
 			m.t("A new stack draft", "A 新建组合草稿"),
 			m.t("d delete profile", "d 删除配置"),
+			m.t("e edit selected", "e 编辑当前项"),
+			m.t("E raw YAML", "E 原始 YAML"),
 			m.t("g reload config", "g 重新加载配置"),
 			m.inlineFilterHint(),
 			m.t("q quit", "q 退出"),
@@ -715,6 +738,10 @@ func (m Model) renderBody(profiles []app.ProfileView, stacks []app.StackView, wi
 		return ""
 	}
 
+	if m.editor != nil {
+		return m.renderEditorBody(width, height)
+	}
+
 	if m.useTwoColumnLayout(width, height) {
 		return m.renderTwoColumnBody(profiles, stacks, width, height)
 	}
@@ -770,7 +797,7 @@ func (m Model) renderProfilesPanel(views []app.ProfileView, width, height int) s
 		if m.workspaceIsEmpty() {
 			return renderFixedPanel(title, m.renderEmptyProfilesLines(innerWidth), width, height, focused)
 		}
-		message := m.t("No profiles yet. Press a to add a starter draft or e to edit the config file.", "还没有配置。按 a 创建草稿，或按 e 编辑配置文件。")
+		message := m.t("No profiles yet. Press a to add a starter draft or e to open the guided form editor.", "还没有配置。按 a 创建草稿，或按 e 打开引导式表单。")
 		return renderFixedPanel(title, []string{mutedStyle.Render(truncateText(message, innerWidth))}, width, height, focused)
 	}
 
@@ -1258,6 +1285,9 @@ func (m Model) handleWorkspaceKey(msg tea.KeyMsg, profiles []app.ProfileView, st
 		m = m.initializeSampleConfig()
 		return m, nil, true
 	case "e":
+		m = m.openSelectionEditor(profiles, stacks)
+		return m, nil, true
+	case "E":
 		if err := m.ensureConfigFileExists(); err != nil {
 			m.lastError = err.Error()
 			return m, nil, true
@@ -1338,7 +1368,8 @@ func (m Model) createStarterProfileDraft() Model {
 	m.inspectorTab = inspectorTabDetails
 	m.inspectorScroll = 0
 	m.selectProfileByName(profile.Name)
-	m.lastNotice = m.tf("Created starter profile %s. Press e to refine the config.", "已创建配置草稿 %s。按 e 继续完善配置。", profile.Name)
+	m = m.beginProfileEditor(profile, profile.Name)
+	m.lastNotice = m.tf("Created starter profile %s. Finish it in the form editor.", "已创建配置草稿 %s。现在可直接在表单里完善。", profile.Name)
 	return m
 }
 
@@ -1369,7 +1400,8 @@ func (m Model) createStarterStackDraft(profiles []app.ProfileView, stacks []app.
 	m.inspectorTab = inspectorTabDetails
 	m.inspectorScroll = 0
 	m.selectStackByName(stack.Name)
-	m.lastNotice = m.tf("Created starter stack %s. Press e to refine the config.", "已创建组合草稿 %s。按 e 继续完善配置。", stack.Name)
+	m = m.beginStackEditor(stack, stack.Name)
+	m.lastNotice = m.tf("Created starter stack %s. Finish it in the form editor.", "已创建组合草稿 %s。现在可直接在表单里完善。", stack.Name)
 	return m
 }
 
@@ -1525,6 +1557,7 @@ func (m Model) reloadConfigFromDisk(successNotice string) Model {
 	m.lastError = ""
 	m.lastNotice = ""
 	m.importMode = false
+	m.editor = nil
 
 	cfg, err := storage.LoadConfig(m.configPath)
 	if err != nil {
@@ -2434,7 +2467,8 @@ func (m Model) renderEmptyProfilesLines(width int) []string {
 		{key: "i", label: m.t("import drafts", "导入草稿")},
 		{key: "s", label: m.t("sample config", "示例配置")},
 		{key: "a", label: m.t("draft profile", "配置草稿")},
-		{key: "e", label: m.t("edit config", "编辑配置")},
+		{key: "e", label: m.t("guided editor", "引导式表单")},
+		{key: "E", label: m.t("raw YAML", "原始 YAML")},
 		{key: "g", label: m.t("reload config", "重新加载配置")},
 		{key: "L", label: m.t("switch language", "切换语言")},
 	})
@@ -2445,7 +2479,8 @@ func (m Model) renderEmptyStacksLines(width int) []string {
 	rows := renderQuickActionRows(width, []quickAction{
 		{key: "A", label: m.t("draft stack", "组合草稿")},
 		{key: "i", label: m.t("import drafts", "导入草稿")},
-		{key: "e", label: m.t("edit config", "编辑配置")},
+		{key: "e", label: m.t("edit selected", "编辑当前项")},
+		{key: "E", label: m.t("raw YAML", "原始 YAML")},
 		{key: "g", label: m.t("reload config", "重新加载配置")},
 		{key: "L", label: m.t("switch language", "切换语言")},
 		{key: "Tab", label: m.t("focus profiles", "切到配置")},
@@ -2461,7 +2496,8 @@ func (m Model) renderEmptyInspectorLines(width int) []string {
 		renderActionLine("i", m.t("import drafts from SSH and Kubernetes config", "从 SSH 和 Kubernetes 配置导入草稿"), width),
 		renderActionLine("s", m.t("seed sample SSH and Kubernetes tunnels", "写入示例 SSH 和 Kubernetes 隧道"), width),
 		renderActionLine("a", m.t("create a starter SSH profile draft", "创建一个 SSH 配置草稿"), width),
-		renderActionLine("e", m.t("open the YAML config in your editor", "在编辑器里打开 YAML 配置"), width),
+		renderActionLine("e", m.t("create a starter draft and open the guided form", "创建草稿并打开引导式表单"), width),
+		renderActionLine("E", m.t("open the raw YAML config in your editor", "在编辑器里打开原始 YAML 配置"), width),
 		renderActionLine("g", m.t("reload external config edits", "重新加载外部改动后的配置"), width),
 		renderActionLine("L", m.t("switch between English and Chinese", "在英文和中文之间切换"), width),
 		"",
@@ -2575,7 +2611,7 @@ func (m Model) applyImportedConfig(cfg domain.Config, importedNames []string, cr
 	if len(importedNames) > 0 {
 		m.selectProfileByName(importedNames[0])
 	}
-	m.lastNotice = successNotice
+	m.lastNotice = successNotice + m.t(" Press e to finish the selected draft in the form editor.", " 按 e 可直接在表单里完善当前选中的草稿。")
 	return m
 }
 
@@ -2679,9 +2715,15 @@ func (m Model) renderProfileStartLines(view app.ProfileView, specErr error, widt
 
 	for _, problem := range analysis.Problems {
 		if excludedProblem != "" && problem == excludedProblem {
+			if fix := m.profileProblemFix(view.Profile, problem); fix != "" {
+				lines = append(lines, renderCompactKeyValue(m.t("Fix", "修复"), fix, width))
+			}
 			continue
 		}
 		lines = append(lines, renderCompactKeyValue(m.t("Blocker", "阻塞项"), problem, width))
+		if fix := m.profileProblemFix(view.Profile, problem); fix != "" {
+			lines = append(lines, renderCompactKeyValue(m.t("Fix", "修复"), fix, width))
+		}
 	}
 
 	return lines
@@ -2716,6 +2758,9 @@ func (m Model) renderStackStartLines(view app.StackView, width int) []string {
 		}
 		for _, problem := range member.Problems {
 			lines = append(lines, renderCompactKeyValue(member.ProfileName, problem, width))
+			if fix := m.stackProblemFix(view.Stack, member.ProfileName, problem); fix != "" {
+				lines = append(lines, renderCompactKeyValue(m.t("Fix", "修复"), fix, width))
+			}
 		}
 	}
 
@@ -2733,7 +2778,8 @@ func (m Model) profileActionLines(view app.ProfileView, width int) []string {
 		renderActionLine("r", m.t("restart tunnel", "重启隧道"), width),
 		renderActionLine("c", m.t("clone profile draft", "克隆配置草稿"), width),
 		renderActionLine("A", m.t("create stack draft from profile", "从配置创建组合草稿"), width),
-		renderActionLine("e", m.t("edit config file", "编辑配置文件"), width),
+		renderActionLine("e", m.t("edit selected profile in form", "在表单里编辑当前配置"), width),
+		renderActionLine("E", m.t("open raw YAML config", "打开原始 YAML 配置"), width),
 		renderActionLine("g", m.t("reload config from disk", "从磁盘重新加载配置"), width),
 		renderActionLine("d", m.t("delete profile", "删除配置"), width),
 	}
@@ -2751,7 +2797,8 @@ func (m Model) stackActionLines(view app.StackView, width int) []string {
 		renderActionLine("p", m.t("open first member profile", "打开第一个成员配置"), width),
 		renderActionLine("c", m.t("clone stack draft", "克隆组合草稿"), width),
 		renderActionLine("A", m.t("create another stack draft", "再创建一个组合草稿"), width),
-		renderActionLine("e", m.t("edit config file", "编辑配置文件"), width),
+		renderActionLine("e", m.t("edit selected stack in form", "在表单里编辑当前组合"), width),
+		renderActionLine("E", m.t("open raw YAML config", "打开原始 YAML 配置"), width),
 		renderActionLine("g", m.t("reload config from disk", "从磁盘重新加载配置"), width),
 		renderActionLine("d", m.t("delete stack", "删除组合"), width),
 	}

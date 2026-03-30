@@ -130,6 +130,13 @@ lazytunnel profile edit staging-db \
   --label db
 ```
 
+Or walk through the same edit interactively:
+
+```bash
+lazytunnel profile edit staging-db --interactive
+lazytunnel stack edit backend-dev --interactive
+```
+
 Import draft profiles from your existing SSH config:
 
 ```bash
@@ -151,8 +158,10 @@ lazytunnel profile import kube-contexts --kubeconfig ~/.kube/config --overwrite
 
 Imported profiles are created as editable drafts. SSH imports use a placeholder
 forward target and Kubernetes imports use a placeholder resource target, so
-you'll usually want to refine them before connecting. If the TUI is already
-open, press `g` to reload the config after importing.
+you'll usually want to refine them before connecting. In the TUI, press `e` to
+finish the selected draft in the built-in form editor, or `E` to jump to raw
+YAML. If the TUI is already open when you import from the CLI, press `g` to
+reload the config after importing.
 
 Validate your config:
 
@@ -170,6 +179,8 @@ Inside the TUI:
 
 - press `i` to open the import prompt for `~/.ssh/config`, kube contexts, or both
 - press `s` to seed the sample config when the workspace is empty
+- press `e` to open the guided form editor for the selected profile or stack
+- press `E` to open the raw YAML config in your external editor
 
 ## Key Features
 
@@ -181,7 +192,9 @@ LazyTunnel is designed around a few strong workflows:
 - group multiple tunnels into a stack and start them together
 - filter profiles and stacks by name, label, target, and port
 - import draft profiles from `~/.ssh/config` and kubeconfig contexts from the CLI or TUI
+- finish imported drafts in a built-in TUI form editor or from `profile edit --interactive`
 - detect local port conflicts before startup
+- show actionable validation hints that point to the next fix
 - manage config from the CLI with add, clone, edit, and remove commands
 - delete profiles and stacks directly from the TUI with confirmation
 - switch the TUI between English and Simplified Chinese instantly

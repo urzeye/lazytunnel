@@ -29,7 +29,10 @@ func newProfileCommand(configPath *string) *cobra.Command {
 }
 
 func newProfileEditCommand(configPath *string) *cobra.Command {
-	var opts editProfileOptions
+	var (
+		opts        editProfileOptions
+		interactive bool
+	)
 
 	cmd := &cobra.Command{
 		Use:     "edit <name>",
@@ -60,9 +63,21 @@ func newProfileEditCommand(configPath *string) *cobra.Command {
 				return err
 			}
 
+			if interactive {
+				profile, err = runInteractiveProfileEdit(cmd.InOrStdin(), cmd.OutOrStdout(), profile)
+				if err != nil {
+					return err
+				}
+				targetName = strings.TrimSpace(profile.Name)
+			}
+
+			if err := profile.Validate(); err != nil {
+				return augmentProfileValidationError(sourceName, profile, err)
+			}
+
 			if targetName != sourceName {
 				if _, exists := findProfile(cfg.Profiles, targetName); exists {
-					return fmt.Errorf("profile %q already exists", targetName)
+					return augmentProfileValidationError(sourceName, profile, fmt.Errorf("profile %q already exists", targetName))
 				}
 			}
 
@@ -78,7 +93,7 @@ func newProfileEditCommand(configPath *string) *cobra.Command {
 			}
 
 			if err := storage.SaveConfig(*configPath, cfg); err != nil {
-				return fmt.Errorf("save config: %w", err)
+				return augmentProfileValidationError(sourceName, profile, fmt.Errorf("save config: %w", err))
 			}
 
 			if targetName != sourceName {
@@ -92,6 +107,7 @@ func newProfileEditCommand(configPath *string) *cobra.Command {
 	}
 
 	bindEditProfileFlags(cmd, &opts)
+	cmd.Flags().BoolVar(&interactive, "interactive", false, "edit the profile through interactive prompts")
 
 	return cmd
 }

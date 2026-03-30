@@ -34,6 +34,7 @@ func newStackEditCommand(configPath *string) *cobra.Command {
 		labels      []string
 		profiles    []string
 		clearLabels bool
+		interactive bool
 	)
 
 	cmd := &cobra.Command{
@@ -73,9 +74,25 @@ func newStackEditCommand(configPath *string) *cobra.Command {
 				stack.Profiles = cleanList(profiles)
 			}
 
+			if interactive {
+				stack, err = runInteractiveStackEdit(cmd.InOrStdin(), cmd.OutOrStdout(), stack)
+				if err != nil {
+					return err
+				}
+				targetName = strings.TrimSpace(stack.Name)
+			}
+
+			profileNames := make(map[string]struct{}, len(cfg.Profiles))
+			for _, profile := range cfg.Profiles {
+				profileNames[profile.Name] = struct{}{}
+			}
+			if err := stack.Validate(profileNames); err != nil {
+				return augmentStackValidationError(sourceName, stack, err)
+			}
+
 			if targetName != sourceName {
 				if _, exists := findStack(cfg.Stacks, targetName); exists {
-					return fmt.Errorf("stack %q already exists", targetName)
+					return augmentStackValidationError(sourceName, stack, fmt.Errorf("stack %q already exists", targetName))
 				}
 				if !cfg.RemoveStack(sourceName) {
 					return fmt.Errorf("stack %q not found", sourceName)
@@ -84,7 +101,7 @@ func newStackEditCommand(configPath *string) *cobra.Command {
 
 			cfg.SetStack(stack)
 			if err := storage.SaveConfig(*configPath, cfg); err != nil {
-				return fmt.Errorf("save config: %w", err)
+				return augmentStackValidationError(sourceName, stack, fmt.Errorf("save config: %w", err))
 			}
 
 			if targetName != sourceName {
@@ -102,6 +119,7 @@ func newStackEditCommand(configPath *string) *cobra.Command {
 	cmd.Flags().StringSliceVar(&labels, "label", nil, "replace labels on the stack")
 	cmd.Flags().StringSliceVar(&profiles, "profile", nil, "replace the member profile list on the stack")
 	cmd.Flags().BoolVar(&clearLabels, "clear-labels", false, "remove all labels before applying label overrides")
+	cmd.Flags().BoolVar(&interactive, "interactive", false, "edit the stack through interactive prompts")
 
 	return cmd
 }

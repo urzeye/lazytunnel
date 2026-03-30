@@ -521,6 +521,91 @@ func TestProfileEditUpdatesSSHDynamicFields(t *testing.T) {
 	}
 }
 
+func TestProfileEditInteractivePromptsAndPersists(t *testing.T) {
+	t.Parallel()
+
+	configPath := filepath.Join(t.TempDir(), "config.yaml")
+	if err := storage.SaveConfig(configPath, storage.SampleConfig()); err != nil {
+		t.Fatalf("save config: %v", err)
+	}
+
+	input := strings.Join([]string{
+		"",
+		"Interactive staging database tunnel",
+		"",
+		"staging, db",
+		"bastion-staging",
+		"staging-db.internal",
+		"15432",
+		"15432",
+		"true",
+		"5",
+		"1s",
+		"10s",
+	}, "\n") + "\n"
+
+	output := executeCommandInput(t, input,
+		"--config", configPath,
+		"profile", "edit", "prod-db",
+		"--interactive",
+	)
+
+	for _, snippet := range []string{"interactive profile editor", "updated profile prod-db"} {
+		if !strings.Contains(output, snippet) {
+			t.Fatalf("expected %q in output, got %q", snippet, output)
+		}
+	}
+
+	cfg, err := storage.LoadConfig(configPath)
+	if err != nil {
+		t.Fatalf("load config: %v", err)
+	}
+
+	edited, exists := findProfile(cfg.Profiles, "prod-db")
+	if !exists {
+		t.Fatal("expected edited profile to exist")
+	}
+	if edited.Description != "Interactive staging database tunnel" {
+		t.Fatalf("unexpected description: %q", edited.Description)
+	}
+	if got := strings.Join(edited.Labels, ","); got != "staging,db" {
+		t.Fatalf("unexpected labels: %q", got)
+	}
+	if edited.SSH == nil || edited.SSH.Host != "bastion-staging" || edited.SSH.RemoteHost != "staging-db.internal" || edited.SSH.RemotePort != 15432 {
+		t.Fatalf("unexpected SSH values: %#v", edited.SSH)
+	}
+	if edited.LocalPort != 15432 {
+		t.Fatalf("unexpected local port: %d", edited.LocalPort)
+	}
+	if !edited.Restart.Enabled || edited.Restart.MaxRetries != 5 || edited.Restart.InitialBackoff != "1s" || edited.Restart.MaxBackoff != "10s" {
+		t.Fatalf("unexpected restart settings: %#v", edited.Restart)
+	}
+}
+
+func TestProfileEditValidationHintSuggestsSpecificFixes(t *testing.T) {
+	t.Parallel()
+
+	configPath := filepath.Join(t.TempDir(), "config.yaml")
+	if err := storage.SaveConfig(configPath, storage.SampleConfig()); err != nil {
+		t.Fatalf("save config: %v", err)
+	}
+
+	_, err := executeCommandErr(t,
+		"--config", configPath,
+		"profile", "edit", "prod-db",
+		"--remote-host", "",
+	)
+	if err == nil {
+		t.Fatal("expected validation error")
+	}
+	if !strings.Contains(err.Error(), "--remote-host <host>") {
+		t.Fatalf("expected remote-host hint, got %v", err)
+	}
+	if !strings.Contains(err.Error(), "--interactive") {
+		t.Fatalf("expected interactive hint, got %v", err)
+	}
+}
+
 func TestProfileEditRejectsWrongFamilyFlags(t *testing.T) {
 	t.Parallel()
 
@@ -720,6 +805,53 @@ func TestStackEditRenamesAndReplacesMembers(t *testing.T) {
 	}
 	if got := strings.Join(edited.Labels, ","); got != "staging" {
 		t.Fatalf("unexpected labels: %q", got)
+	}
+}
+
+func TestStackEditInteractivePromptsAndPersists(t *testing.T) {
+	t.Parallel()
+
+	configPath := filepath.Join(t.TempDir(), "config.yaml")
+	if err := storage.SaveConfig(configPath, storage.SampleConfig()); err != nil {
+		t.Fatalf("save config: %v", err)
+	}
+
+	input := strings.Join([]string{
+		"backend-staging",
+		"Interactive staging stack",
+		"staging",
+		"api-debug",
+	}, "\n") + "\n"
+
+	output := executeCommandInput(t, input,
+		"--config", configPath,
+		"stack", "edit", "backend-dev",
+		"--interactive",
+	)
+
+	for _, snippet := range []string{"interactive stack editor", "updated stack backend-staging (renamed from backend-dev)"} {
+		if !strings.Contains(output, snippet) {
+			t.Fatalf("expected %q in output, got %q", snippet, output)
+		}
+	}
+
+	cfg, err := storage.LoadConfig(configPath)
+	if err != nil {
+		t.Fatalf("load config: %v", err)
+	}
+
+	edited, exists := findStack(cfg.Stacks, "backend-staging")
+	if !exists {
+		t.Fatal("expected renamed stack to exist")
+	}
+	if edited.Description != "Interactive staging stack" {
+		t.Fatalf("unexpected description: %q", edited.Description)
+	}
+	if got := strings.Join(edited.Labels, ","); got != "staging" {
+		t.Fatalf("unexpected labels: %q", got)
+	}
+	if got := strings.Join(edited.Profiles, ","); got != "api-debug" {
+		t.Fatalf("unexpected profiles: %q", got)
 	}
 }
 
@@ -989,12 +1121,17 @@ contexts:
 }
 
 func executeCommand(t *testing.T, args ...string) string {
+	return executeCommandInput(t, "", args...)
+}
+
+func executeCommandInput(t *testing.T, input string, args ...string) string {
 	t.Helper()
 
 	cmd := NewRootCommand()
 	var stdout bytes.Buffer
 	cmd.SetOut(&stdout)
 	cmd.SetErr(&stdout)
+	cmd.SetIn(strings.NewReader(input))
 	cmd.SetArgs(args)
 
 	if err := cmd.Execute(); err != nil {
@@ -1005,12 +1142,17 @@ func executeCommand(t *testing.T, args ...string) string {
 }
 
 func executeCommandErr(t *testing.T, args ...string) (string, error) {
+	return executeCommandErrInput(t, "", args...)
+}
+
+func executeCommandErrInput(t *testing.T, input string, args ...string) (string, error) {
 	t.Helper()
 
 	cmd := NewRootCommand()
 	var stdout bytes.Buffer
 	cmd.SetOut(&stdout)
 	cmd.SetErr(&stdout)
+	cmd.SetIn(strings.NewReader(input))
 	cmd.SetArgs(args)
 
 	return stdout.String(), cmd.Execute()
