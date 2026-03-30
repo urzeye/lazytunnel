@@ -183,12 +183,14 @@ lazytunnel
 在 TUI 里：
 
 - 按 `i` 打开导入提示，可从 `~/.ssh/config`、Kubernetes context，或两者一起导入
+- 按 `a` 选择一个 profile 预设，可直接从 SSH 本地、SSH 远程、SOCKS 或 Kubernetes 模板开始，再在表单里补全
+- 按 `A` 选择一个 stack 预设，可从当前选择、当前可见配置或运行中的配置生成
 - 当工作区为空时，按 `s` 写入示例配置
 - 按 `e` 用引导式表单编辑当前选中的 profile / stack
 - 按 `E` 在外部编辑器里打开原始 YAML 配置
 - 在日志面板里，按 `f` 切换跟随 / 暂停，按 `t` / `T` 切换来源，按 `w` 切换换行 / 截断，按 `n` / `N` 在筛选命中之间跳转
 - 在 stack 详情里，按 `[` / `]` 选择成员，按 `S` 启动或停止当前成员，按 `R` 重启当前成员，按 `p` 打开当前成员 profile
-- 在 stack 表单编辑器里，按 `+` 在当前成员下方新增一行，按 `Ctrl+X` 删除当前成员，按 `[` / `]` 调整成员顺序
+- 在 stack 表单编辑器里，输入 `,` 或直接粘贴逗号 / 换行分隔的 profile 名称可自动展开成员行，按 `+` 在当前成员下方新增一行，按 `Ctrl+X` 删除当前成员，按 `[` / `]` 调整成员顺序
 
 ## 核心能力
 
@@ -200,6 +202,7 @@ LazyTunnel 围绕几个高频场景来设计：
 - 把多条 tunnel 组合成一个 stack，按项目批量启动
 - 按名称、标签、目标和端口快速过滤 profile / stack
 - 在日志面板里按文本和来源筛选日志，高亮命中内容，并在命中之间快速跳转
+- 通过引导式 preset 创建新的 profile / stack，而不是从空白 YAML 开始写
 - 通过 CLI 或 TUI 从 `~/.ssh/config` 和 kubeconfig context 导入 draft profile
 - 通过 TUI 内置表单或 `profile edit --interactive` 继续完善导入草稿
 - 在启动前识别本地端口冲突

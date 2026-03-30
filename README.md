@@ -178,12 +178,14 @@ lazytunnel
 Inside the TUI:
 
 - press `i` to open the import prompt for `~/.ssh/config`, kube contexts, or both
+- press `a` to choose a profile preset for SSH local, SSH remote, SOCKS, or Kubernetes, then finish it in the guided form
+- press `A` to choose a stack preset from the current selection, visible profiles, or running profiles
 - press `s` to seed the sample config when the workspace is empty
 - press `e` to open the guided form editor for the selected profile or stack
 - press `E` to open the raw YAML config in your external editor
 - inside the logs inspector, use `f` to follow/pause, `t` / `T` to cycle sources, `w` to wrap or truncate, and `n` / `N` to jump between filter hits
 - inside stack details, use `[` / `]` to pick a member, `S` to start or stop it, `R` to restart it, and `p` to open that member profile
-- inside the stack form editor, use `+` to add a member below the current row, `Ctrl+X` to remove it, and `[` / `]` to reorder members
+- inside the stack form editor, use `,` or paste comma/newline-separated profile names to expand member rows, `+` to add a member below the current row, `Ctrl+X` to remove it, and `[` / `]` to reorder members
 
 ## Key Features
 
@@ -195,6 +197,7 @@ LazyTunnel is designed around a few strong workflows:
 - group multiple tunnels into a stack and start them together
 - filter profiles and stacks by name, label, target, and port
 - filter logs by text and source, highlight matches, and jump across hits from the logs inspector
+- create new profiles and stacks from guided presets instead of starting from a blank YAML draft
 - import draft profiles from `~/.ssh/config` and kubeconfig contexts from the CLI or TUI
 - finish imported drafts in a built-in TUI form editor or from `profile edit --interactive`
 - detect local port conflicts before startup

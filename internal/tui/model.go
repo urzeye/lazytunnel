@@ -181,6 +181,7 @@ type editorFinishedMsg struct {
 type listFocus int
 type inspectorTab int
 type filterScope int
+type createPresetMode int
 
 const (
 	focusProfiles listFocus = iota
@@ -195,6 +196,12 @@ const (
 const (
 	filterScopeList filterScope = iota
 	filterScopeLogs
+)
+
+const (
+	createPresetNone createPresetMode = iota
+	createPresetProfile
+	createPresetStack
 )
 
 type deleteKind string
@@ -254,6 +261,7 @@ type mouseLayout struct {
 	inspectorTabs []mouseInspectorTabRegion
 	stackMembers  []mouseStackMemberRegion
 	importActions []mouseImportActionRegion
+	presetActions []mouseImportActionRegion
 }
 
 type stackMemberLineInfo struct {
@@ -287,6 +295,7 @@ type Model struct {
 	filterScope         filterScope
 	pendingDelete       *deleteRequest
 	importMode          bool
+	createPresetMode    createPresetMode
 	inspectorTab        inspectorTab
 	inspectorScroll     int
 	selectedStackMember int
@@ -382,6 +391,14 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		if m.importMode {
 			var handled bool
 			m, handled = m.handleImportKey(msg)
+			if handled {
+				return m, nil
+			}
+		}
+
+		if m.createPresetMode != createPresetNone {
+			var handled bool
+			m, handled = m.handleCreatePresetKey(msg, profiles, stacks)
 			if handled {
 				return m, nil
 			}
@@ -584,6 +601,8 @@ func (m Model) renderStatusLine(width int) string {
 		return renderInlineBanner(deletePromptStyle, m.pendingDelete.Message, width)
 	case m.importMode:
 		return renderInlineBanner(importPromptStyle, m.importPromptMessage(), width)
+	case m.createPresetMode != createPresetNone:
+		return renderInlineBanner(importPromptStyle, m.createPresetPromptMessage(), width)
 	case m.lastError != "":
 		return renderInlineBanner(errorBannerStyle, m.t("Last error: ", "最近错误: ")+m.lastError, width)
 	default:
@@ -611,6 +630,10 @@ func (m Model) hintMessage() string {
 		return m.t("Delete mode: y or Enter confirms. n or Esc cancels.", "删除模式: y 或 Enter 确认，n 或 Esc 取消。")
 	case m.importMode:
 		return m.t("Import mode: s imports ~/.ssh/config, k imports kube contexts, a imports both. Esc cancels.", "导入模式: s 导入 ~/.ssh/config，k 导入 Kubernetes context，a 两者都导入。Esc 取消。")
+	case m.createPresetMode == createPresetProfile:
+		return m.t("Preset mode: l creates SSH local, r SSH remote, d SOCKS, k Kubernetes. Esc cancels.", "预设模式: l 创建 SSH 本地，r SSH 远程，d SOCKS，k Kubernetes。Esc 取消。")
+	case m.createPresetMode == createPresetStack:
+		return m.t("Preset mode: s seeds from selection, v from visible profiles, r from running profiles. Esc cancels.", "预设模式: s 从当前选择生成，v 从可见配置生成，r 从运行中配置生成。Esc 取消。")
 	case m.filterMode:
 		if m.filterScope == filterScopeLogs {
 			return m.t("Log filter mode: type to search messages, sources, and profile names. Enter finishes. Esc clears or exits. Backspace/Ctrl+W deletes. Ctrl+U clears.", "日志筛选模式: 可搜索消息、来源和 profile 名。Enter 完成，Esc 清空或退出，Backspace/Ctrl+W 删除，Ctrl+U 清空。")
@@ -620,7 +643,7 @@ func (m Model) hintMessage() string {
 		return joinHintParts(
 			m.t("i import drafts", "i 导入草稿"),
 			m.t("s sample config", "s 示例配置"),
-			m.t("a new tunnel draft", "a 新建隧道草稿"),
+			m.t("a profile preset", "a 配置预设"),
 			m.t("e guided editor", "e 引导式表单"),
 			m.t("E raw YAML", "E 原始 YAML"),
 			m.t("g reload config", "g 重新加载配置"),
@@ -636,7 +659,7 @@ func (m Model) hintMessage() string {
 	case profileCount == 0:
 		return joinHintParts(
 			m.t("i import drafts", "i 导入草稿"),
-			m.t("a new tunnel draft", "a 新建隧道草稿"),
+			m.t("a profile preset", "a 配置预设"),
 			m.t("e guided editor", "e 引导式表单"),
 			m.t("E raw YAML", "E 原始 YAML"),
 			m.t("g reload config", "g 重新加载配置"),
@@ -653,7 +676,8 @@ func (m Model) hintMessage() string {
 			m.inlineLogNavigationHint(),
 			m.t("c clone profile", "c 克隆配置"),
 			m.t("i import drafts", "i 导入草稿"),
-			m.t("A new stack draft", "A 新建组合草稿"),
+			m.t("a profile preset", "a 配置预设"),
+			m.t("A stack preset", "A 组合预设"),
 			m.t("e edit selected", "e 编辑当前项"),
 			m.t("E raw YAML", "E 原始 YAML"),
 			m.t("g reload config", "g 重新加载配置"),
@@ -671,7 +695,8 @@ func (m Model) hintMessage() string {
 			m.inlineLogNavigationHint(),
 			m.t("c clone stack", "c 克隆组合"),
 			m.t("i import drafts", "i 导入草稿"),
-			m.t("A new stack draft", "A 新建组合草稿"),
+			m.t("a profile preset", "a 配置预设"),
+			m.t("A stack preset", "A 组合预设"),
 			m.t("d delete stack", "d 删除组合"),
 			m.t("e edit selected", "e 编辑当前项"),
 			m.t("E raw YAML", "E 原始 YAML"),
@@ -689,7 +714,8 @@ func (m Model) hintMessage() string {
 			m.inlineLogNavigationHint(),
 			m.t("c clone profile", "c 克隆配置"),
 			m.t("i import drafts", "i 导入草稿"),
-			m.t("A new stack draft", "A 新建组合草稿"),
+			m.t("a profile preset", "a 配置预设"),
+			m.t("A stack preset", "A 组合预设"),
 			m.t("d delete profile", "d 删除配置"),
 			m.t("e edit selected", "e 编辑当前项"),
 			m.t("E raw YAML", "E 原始 YAML"),
@@ -702,6 +728,17 @@ func (m Model) hintMessage() string {
 
 func (m Model) importPromptMessage() string {
 	return m.t("Import drafts: s SSH config, k kube contexts, a both, Esc cancel.", "导入草稿: s SSH 配置，k Kubernetes context，a 全部导入，Esc 取消。")
+}
+
+func (m Model) createPresetPromptMessage() string {
+	switch m.createPresetMode {
+	case createPresetProfile:
+		return m.t("Create profile preset: l SSH local, r SSH remote, d SSH dynamic, k Kubernetes, Esc cancel.", "创建配置预设: l SSH 本地，r SSH 远程，d SSH 动态，k Kubernetes，Esc 取消。")
+	case createPresetStack:
+		return m.t("Create stack preset: s current selection, v visible profiles, r running profiles, Esc cancel.", "创建组合预设: s 当前选择，v 可见配置，r 运行中配置，Esc 取消。")
+	default:
+		return ""
+	}
 }
 
 func joinHintParts(parts ...string) string {
@@ -847,7 +884,7 @@ func (m Model) renderProfilesPanel(views []app.ProfileView, width, height int) s
 		if m.workspaceIsEmpty() {
 			return renderFixedPanel(title, m.renderEmptyProfilesLines(innerWidth), width, height, focused)
 		}
-		message := m.t("No profiles yet. Press a to add a starter draft or e to open the guided form editor.", "还没有配置。按 a 创建草稿，或按 e 打开引导式表单。")
+		message := m.t("No profiles yet. Press a to choose a preset or e to open the guided form editor.", "还没有配置。按 a 选择预设，或按 e 打开引导式表单。")
 		return renderFixedPanel(title, []string{mutedStyle.Render(truncateText(message, innerWidth))}, width, height, focused)
 	}
 
@@ -1567,6 +1604,7 @@ func (m Model) handleWorkspaceKey(msg tea.KeyMsg, profiles []app.ProfileView, st
 		m.lastError = ""
 		m.lastNotice = ""
 		m.filterMode = false
+		m.createPresetMode = createPresetNone
 		m.importMode = true
 		return m, nil, true
 	case "s", "S":
@@ -1587,7 +1625,11 @@ func (m Model) handleWorkspaceKey(msg tea.KeyMsg, profiles []app.ProfileView, st
 		m.lastNotice = ""
 		return m, openEditorCmd(m.configPath), true
 	case "a":
-		m = m.createStarterProfileDraft()
+		m.lastError = ""
+		m.lastNotice = ""
+		m.filterMode = false
+		m.importMode = false
+		m.createPresetMode = createPresetProfile
 		return m, nil, true
 	case "L":
 		m = m.toggleLanguage()
@@ -1596,7 +1638,11 @@ func (m Model) handleWorkspaceKey(msg tea.KeyMsg, profiles []app.ProfileView, st
 		m = m.cloneSelection(profiles, stacks)
 		return m, nil, true
 	case "A":
-		m = m.createStarterStackDraft(profiles, stacks)
+		m.lastError = ""
+		m.lastNotice = ""
+		m.filterMode = false
+		m.importMode = false
+		m.createPresetMode = createPresetStack
 		return m, nil, true
 	case "p":
 		if m.focus != focusStacks || len(stacks) == 0 {
@@ -1619,6 +1665,7 @@ func (m Model) initializeSampleConfig() Model {
 	m.lastNotice = ""
 	m.filterQuery = ""
 	m.filterMode = false
+	m.createPresetMode = createPresetNone
 
 	cfg := storage.SampleConfig()
 	cfg.Language = m.language()
@@ -1643,6 +1690,7 @@ func (m Model) createStarterProfileDraft() Model {
 	m.filterQuery = ""
 	m.filterMode = false
 	m.importMode = false
+	m.createPresetMode = createPresetNone
 
 	cfg := m.service.Config()
 	profile := starterSSHProfileDraft(cfg, m.language())
@@ -1664,10 +1712,39 @@ func (m Model) createStarterProfileDraft() Model {
 	return m
 }
 
+func (m Model) createProfileDraftWithPreset(preset profilePreset) Model {
+	m.lastError = ""
+	m.lastNotice = ""
+	m.filterQuery = ""
+	m.filterMode = false
+	m.importMode = false
+	m.createPresetMode = createPresetNone
+
+	cfg := m.service.Config()
+	profile := starterProfileDraftForPreset(cfg, preset, m.language())
+	cfg.SetProfile(profile)
+
+	if err := storage.SaveConfig(m.configPath, cfg); err != nil {
+		m.lastError = m.t("Create profile preset: ", "创建配置预设失败: ") + err.Error()
+		return m
+	}
+
+	m.service.ReplaceConfig(cfg)
+	m.focus = focusProfiles
+	m.selectedStack = 0
+	m.inspectorTab = inspectorTabDetails
+	m.inspectorScroll = 0
+	m.selectProfileByName(profile.Name)
+	m = m.beginProfileEditor(profile, profile.Name)
+	m.setNotice(m.tf("Created %s preset profile %s. Finish it in the form editor.", "已创建%s预设配置 %s。现在可直接在表单里完善。", profilePresetLabel(m.language(), preset), profile.Name))
+	return m
+}
+
 func (m Model) createStarterStackDraft(profiles []app.ProfileView, stacks []app.StackView) Model {
 	m.lastError = ""
 	m.lastNotice = ""
 	m.importMode = false
+	m.createPresetMode = createPresetNone
 
 	cfg := m.service.Config()
 	stack, err := starterStackDraft(cfg, profiles, stacks, m.focus, m.selectedProfile, m.selectedStack, m.filterQuery, m.language())
@@ -1693,6 +1770,72 @@ func (m Model) createStarterStackDraft(profiles []app.ProfileView, stacks []app.
 	m.selectStackByName(stack.Name)
 	m = m.beginStackEditor(stack, stack.Name)
 	m.setNotice(m.tf("Created starter stack %s. Finish it in the form editor.", "已创建组合草稿 %s。现在可直接在表单里完善。", stack.Name))
+	return m
+}
+
+func (m Model) createVisibleProfilesStackDraft(profiles []app.ProfileView) Model {
+	m.lastError = ""
+	m.lastNotice = ""
+	m.importMode = false
+	m.createPresetMode = createPresetNone
+
+	cfg := m.service.Config()
+	stack, err := starterVisibleStackDraft(cfg, profiles, m.language())
+	if err != nil {
+		m.lastError = err.Error()
+		return m
+	}
+
+	m.filterQuery = ""
+	m.filterMode = false
+	cfg.SetStack(stack)
+
+	if err := storage.SaveConfig(m.configPath, cfg); err != nil {
+		m.lastError = m.t("Create stack preset: ", "创建组合预设失败: ") + err.Error()
+		return m
+	}
+
+	m.service.ReplaceConfig(cfg)
+	m.focus = focusStacks
+	m.selectedProfile = 0
+	m.inspectorTab = inspectorTabDetails
+	m.inspectorScroll = 0
+	m.selectStackByName(stack.Name)
+	m = m.beginStackEditor(stack, stack.Name)
+	m.setNotice(m.tf("Created visible-profiles stack %s. Finish it in the form editor.", "已创建可见配置组合 %s。现在可直接在表单里完善。", stack.Name))
+	return m
+}
+
+func (m Model) createRunningProfilesStackDraft() Model {
+	m.lastError = ""
+	m.lastNotice = ""
+	m.importMode = false
+	m.createPresetMode = createPresetNone
+
+	cfg := m.service.Config()
+	stack, err := starterRunningStackDraft(cfg, m.service.ProfileViews(), m.language())
+	if err != nil {
+		m.lastError = err.Error()
+		return m
+	}
+
+	m.filterQuery = ""
+	m.filterMode = false
+	cfg.SetStack(stack)
+
+	if err := storage.SaveConfig(m.configPath, cfg); err != nil {
+		m.lastError = m.t("Create stack preset: ", "创建组合预设失败: ") + err.Error()
+		return m
+	}
+
+	m.service.ReplaceConfig(cfg)
+	m.focus = focusStacks
+	m.selectedProfile = 0
+	m.inspectorTab = inspectorTabDetails
+	m.inspectorScroll = 0
+	m.selectStackByName(stack.Name)
+	m = m.beginStackEditor(stack, stack.Name)
+	m.setNotice(m.tf("Created running-profiles stack %s. Finish it in the form editor.", "已创建运行中配置组合 %s。现在可直接在表单里完善。", stack.Name))
 	return m
 }
 
@@ -1723,6 +1866,7 @@ func (m Model) toggleLanguage() Model {
 	m.lastError = ""
 	m.lastNotice = ""
 	m.importMode = false
+	m.createPresetMode = createPresetNone
 
 	cfg := m.service.Config()
 	next := nextLanguage(cfg.Language)
@@ -1742,6 +1886,7 @@ func (m Model) cloneSelection(profiles []app.ProfileView, stacks []app.StackView
 	m.lastError = ""
 	m.lastNotice = ""
 	m.importMode = false
+	m.createPresetMode = createPresetNone
 
 	if m.focus == focusStacks && len(stacks) > 0 {
 		return m.cloneSelectedStack(stacks)
@@ -1761,6 +1906,7 @@ func (m Model) restartSelection(profiles []app.ProfileView, stacks []app.StackVi
 	m.lastError = ""
 	m.lastNotice = ""
 	m.importMode = false
+	m.createPresetMode = createPresetNone
 
 	if m.focus == focusStacks && len(stacks) > 0 {
 		name := stacks[max(0, min(m.selectedStack, len(stacks)-1))].Stack.Name
@@ -1846,6 +1992,7 @@ func (m Model) reloadConfigFromDisk(successNotice string) Model {
 	m.lastError = ""
 	m.lastNotice = ""
 	m.importMode = false
+	m.createPresetMode = createPresetNone
 	m.editor = nil
 
 	cfg, err := storage.LoadConfig(m.configPath)
@@ -2102,6 +2249,33 @@ func (m Model) handleMouse(msg tea.MouseMsg, profiles []app.ProfileView, stacks 
 		return m, false
 	}
 
+	if m.createPresetMode != createPresetNone {
+		for _, region := range layout.presetActions {
+			if !region.rect.contains(msg.X, msg.Y) {
+				continue
+			}
+
+			switch region.action {
+			case "profile-local":
+				m = m.createProfileDraftWithPreset(profilePresetSSHLocal)
+			case "profile-remote":
+				m = m.createProfileDraftWithPreset(profilePresetSSHRemote)
+			case "profile-dynamic":
+				m = m.createProfileDraftWithPreset(profilePresetSSHDynamic)
+			case "profile-kubernetes":
+				m = m.createProfileDraftWithPreset(profilePresetKubernetes)
+			case "stack-selection":
+				m = m.createStarterStackDraft(profiles, stacks)
+			case "stack-visible":
+				m = m.createVisibleProfilesStackDraft(profiles)
+			case "stack-running":
+				m = m.createRunningProfilesStackDraft()
+			}
+			return m, true
+		}
+		return m, false
+	}
+
 	if layout.headerFilter.contains(msg.X, msg.Y) {
 		m.clearNotice()
 		m.filterMode = true
@@ -2171,6 +2345,51 @@ func (m Model) handleImportKey(msg tea.KeyMsg) (Model, bool) {
 		return m, true
 	default:
 		return m, true
+	}
+}
+
+func (m Model) handleCreatePresetKey(msg tea.KeyMsg, profiles []app.ProfileView, stacks []app.StackView) (Model, bool) {
+	switch msg.String() {
+	case "esc":
+		m.createPresetMode = createPresetNone
+		m.setNotice(m.t("Preset selection cancelled.", "已取消预设选择。"))
+		return m, true
+	}
+
+	switch m.createPresetMode {
+	case createPresetProfile:
+		switch msg.String() {
+		case "l", "L":
+			m = m.createProfileDraftWithPreset(profilePresetSSHLocal)
+			return m, true
+		case "r", "R":
+			m = m.createProfileDraftWithPreset(profilePresetSSHRemote)
+			return m, true
+		case "d", "D":
+			m = m.createProfileDraftWithPreset(profilePresetSSHDynamic)
+			return m, true
+		case "k", "K":
+			m = m.createProfileDraftWithPreset(profilePresetKubernetes)
+			return m, true
+		default:
+			return m, true
+		}
+	case createPresetStack:
+		switch msg.String() {
+		case "s", "S":
+			m = m.createStarterStackDraft(profiles, stacks)
+			return m, true
+		case "v", "V":
+			m = m.createVisibleProfilesStackDraft(profiles)
+			return m, true
+		case "r", "R":
+			m = m.createRunningProfilesStackDraft()
+			return m, true
+		default:
+			return m, true
+		}
+	default:
+		return m, false
 	}
 }
 
@@ -2348,7 +2567,7 @@ func (m Model) showHint() bool {
 }
 
 func (m Model) hasStatusLine() bool {
-	return m.pendingDelete != nil || m.importMode || m.lastError != "" || m.activeNotice() != ""
+	return m.pendingDelete != nil || m.importMode || m.createPresetMode != createPresetNone || m.lastError != "" || m.activeNotice() != ""
 }
 
 func (m Model) contentOrigin() (int, int) {
@@ -2609,6 +2828,9 @@ func (m Model) mouseLayout(profiles []app.ProfileView, stacks []app.StackView) m
 	if m.importMode {
 		layout.importActions = m.importActionRegions(contentX, statusY, width)
 	}
+	if m.createPresetMode != createPresetNone {
+		layout.presetActions = m.createPresetActionRegions(contentX, statusY, width)
+	}
 
 	bodyY := statusY
 	if status := m.renderStatusLine(width); status != "" {
@@ -2787,6 +3009,57 @@ func (m Model) importActionRegions(contentX, y, width int) []mouseImportActionRe
 	return regions
 }
 
+func (m Model) createPresetActionRegions(contentX, y, width int) []mouseImportActionRegion {
+	text := truncateText(m.createPresetPromptMessage(), max(1, width-importPromptStyle.GetHorizontalFrameSize()))
+	startX := contentX + importPromptStyle.GetPaddingLeft()
+
+	actions := []struct {
+		action string
+		text   string
+	}{}
+	switch m.createPresetMode {
+	case createPresetProfile:
+		actions = []struct {
+			action string
+			text   string
+		}{
+			{action: "profile-local", text: m.t("l SSH local", "l SSH 本地")},
+			{action: "profile-remote", text: m.t("r SSH remote", "r SSH 远程")},
+			{action: "profile-dynamic", text: m.t("d SSH dynamic", "d SSH 动态")},
+			{action: "profile-kubernetes", text: m.t("k Kubernetes", "k Kubernetes")},
+		}
+	case createPresetStack:
+		actions = []struct {
+			action string
+			text   string
+		}{
+			{action: "stack-selection", text: m.t("s current selection", "s 当前选择")},
+			{action: "stack-visible", text: m.t("v visible profiles", "v 可见配置")},
+			{action: "stack-running", text: m.t("r running profiles", "r 运行中配置")},
+		}
+	}
+
+	regions := make([]mouseImportActionRegion, 0, len(actions))
+	for _, action := range actions {
+		idx := strings.Index(text, action.text)
+		if idx < 0 {
+			continue
+		}
+
+		regions = append(regions, mouseImportActionRegion{
+			rect: mouseRect{
+				x:      startX + lipgloss.Width(text[:idx]),
+				y:      y,
+				width:  lipgloss.Width(action.text),
+				height: 1,
+			},
+			action: action.action,
+		})
+	}
+
+	return regions
+}
+
 func (m Model) defaultFilterScope() filterScope {
 	if m.inspectorTab == inspectorTabLogs {
 		return filterScopeLogs
@@ -2859,7 +3132,7 @@ func (m Model) renderEmptyProfilesLines(width int) []string {
 	rows := renderQuickActionRows(width, []quickAction{
 		{key: "i", label: m.t("import drafts", "导入草稿")},
 		{key: "s", label: m.t("sample config", "示例配置")},
-		{key: "a", label: m.t("draft profile", "配置草稿")},
+		{key: "a", label: m.t("profile preset", "配置预设")},
 		{key: "e", label: m.t("guided editor", "引导式表单")},
 		{key: "E", label: m.t("raw YAML", "原始 YAML")},
 		{key: "g", label: m.t("reload config", "重新加载配置")},
@@ -2870,7 +3143,7 @@ func (m Model) renderEmptyProfilesLines(width int) []string {
 
 func (m Model) renderEmptyStacksLines(width int) []string {
 	rows := renderQuickActionRows(width, []quickAction{
-		{key: "A", label: m.t("draft stack", "组合草稿")},
+		{key: "A", label: m.t("stack preset", "组合预设")},
 		{key: "i", label: m.t("import drafts", "导入草稿")},
 		{key: "e", label: m.t("edit selected", "编辑当前项")},
 		{key: "E", label: m.t("raw YAML", "原始 YAML")},
@@ -2888,7 +3161,7 @@ func (m Model) renderEmptyInspectorLines(width int) []string {
 		"",
 		renderActionLine("i", m.t("import drafts from SSH and Kubernetes config", "从 SSH 和 Kubernetes 配置导入草稿"), width),
 		renderActionLine("s", m.t("seed sample SSH and Kubernetes tunnels", "写入示例 SSH 和 Kubernetes 隧道"), width),
-		renderActionLine("a", m.t("create a starter SSH profile draft", "创建一个 SSH 配置草稿"), width),
+		renderActionLine("a", m.t("choose a profile preset and open the guided form", "选择一个配置预设并打开引导式表单"), width),
 		renderActionLine("e", m.t("create a starter draft and open the guided form", "创建草稿并打开引导式表单"), width),
 		renderActionLine("E", m.t("open the raw YAML config in your editor", "在编辑器里打开原始 YAML 配置"), width),
 		renderActionLine("g", m.t("reload external config edits", "重新加载外部改动后的配置"), width),
@@ -3232,6 +3505,41 @@ func (m Model) stackActionLines(view app.StackView, width int) []string {
 	return lines
 }
 
+type profilePreset string
+
+const (
+	profilePresetSSHLocal   profilePreset = "ssh-local"
+	profilePresetSSHRemote  profilePreset = "ssh-remote"
+	profilePresetSSHDynamic profilePreset = "ssh-dynamic"
+	profilePresetKubernetes profilePreset = "kubernetes"
+)
+
+func starterProfileDraftForPreset(cfg domain.Config, preset profilePreset, language domain.Language) domain.Profile {
+	switch preset {
+	case profilePresetSSHRemote:
+		return starterSSHRemoteProfileDraft(cfg, language)
+	case profilePresetSSHDynamic:
+		return starterSSHDynamicProfileDraft(cfg, language)
+	case profilePresetKubernetes:
+		return starterKubernetesProfileDraft(cfg, language)
+	default:
+		return starterSSHProfileDraft(cfg, language)
+	}
+}
+
+func profilePresetLabel(language domain.Language, preset profilePreset) string {
+	switch preset {
+	case profilePresetSSHRemote:
+		return translate(language, "SSH remote", "SSH 远程")
+	case profilePresetSSHDynamic:
+		return translate(language, "SOCKS", "SOCKS")
+	case profilePresetKubernetes:
+		return translate(language, "Kubernetes", "Kubernetes")
+	default:
+		return translate(language, "SSH local", "SSH 本地")
+	}
+}
+
 func starterSSHProfileDraft(cfg domain.Config, language domain.Language) domain.Profile {
 	return domain.Profile{
 		Name:        nextProfileDraftName(cfg, "draft-ssh"),
@@ -3253,6 +3561,72 @@ func starterSSHProfileDraft(cfg domain.Config, language domain.Language) domain.
 	}
 }
 
+func starterSSHRemoteProfileDraft(cfg domain.Config, language domain.Language) domain.Profile {
+	return domain.Profile{
+		Name:        nextProfileDraftName(cfg, "draft-ssh-remote"),
+		Description: translate(language, "Starter SSH remote-forward draft. Update the bind and target before using it.", "SSH 远程转发草稿模板。使用前请先改成你的监听和目标地址。"),
+		Type:        domain.TunnelTypeSSHRemote,
+		LocalPort:   9000,
+		Restart: domain.RestartPolicy{
+			Enabled:        true,
+			MaxRetries:     0,
+			InitialBackoff: "2s",
+			MaxBackoff:     "30s",
+		},
+		Labels: []string{"draft"},
+		SSHRemote: &domain.SSHRemote{
+			Host:        "example-bastion",
+			BindAddress: "127.0.0.1",
+			BindPort:    9000,
+			TargetHost:  "127.0.0.1",
+			TargetPort:  8080,
+		},
+	}
+}
+
+func starterSSHDynamicProfileDraft(cfg domain.Config, language domain.Language) domain.Profile {
+	return domain.Profile{
+		Name:        nextProfileDraftName(cfg, "draft-socks"),
+		Description: translate(language, "Starter SSH dynamic SOCKS draft. Update the host before using it.", "SSH 动态 SOCKS 草稿模板。使用前请先改成你的目标主机。"),
+		Type:        domain.TunnelTypeSSHDynamic,
+		LocalPort:   nextAvailableLocalPort(cfg, 1080),
+		Restart: domain.RestartPolicy{
+			Enabled:        true,
+			MaxRetries:     0,
+			InitialBackoff: "2s",
+			MaxBackoff:     "30s",
+		},
+		Labels: []string{"draft"},
+		SSHDynamic: &domain.SSHDynamic{
+			Host:        "example-bastion",
+			BindAddress: "127.0.0.1",
+		},
+	}
+}
+
+func starterKubernetesProfileDraft(cfg domain.Config, language domain.Language) domain.Profile {
+	return domain.Profile{
+		Name:        nextProfileDraftName(cfg, "draft-kube"),
+		Description: translate(language, "Starter Kubernetes port-forward draft. Pick the real resource before using it.", "Kubernetes 端口转发草稿模板。使用前请先选好真实资源。"),
+		Type:        domain.TunnelTypeKubernetesPortForward,
+		LocalPort:   nextAvailableLocalPort(cfg, 18080),
+		Restart: domain.RestartPolicy{
+			Enabled:        true,
+			MaxRetries:     0,
+			InitialBackoff: "2s",
+			MaxBackoff:     "30s",
+		},
+		Labels: []string{"draft"},
+		Kubernetes: &domain.Kubernetes{
+			Context:      "",
+			Namespace:    "default",
+			ResourceType: "service",
+			Resource:     "change-me",
+			RemotePort:   80,
+		},
+	}
+}
+
 func starterStackDraft(cfg domain.Config, profiles []app.ProfileView, stacks []app.StackView, focus listFocus, selectedProfile, selectedStack int, filterQuery string, language domain.Language) (domain.Stack, error) {
 	members, sourceLabel, err := starterStackMembers(profiles, stacks, focus, selectedProfile, selectedStack, filterQuery, len(cfg.Profiles), language)
 	if err != nil {
@@ -3266,6 +3640,43 @@ func starterStackDraft(cfg domain.Config, profiles []app.ProfileView, stacks []a
 		Profiles:    members,
 	}
 	return stack, nil
+}
+
+func starterVisibleStackDraft(cfg domain.Config, profiles []app.ProfileView, language domain.Language) (domain.Stack, error) {
+	if len(profiles) == 0 {
+		return domain.Stack{}, fmt.Errorf("%s", translate(language, "No visible profiles to seed the stack. Clear the filter or import / create a profile first.", "当前没有可见配置可用于生成组合。请清除筛选，或先导入 / 创建配置。"))
+	}
+
+	members := make([]string, 0, len(profiles))
+	for _, profile := range profiles {
+		members = append(members, profile.Profile.Name)
+	}
+
+	return domain.Stack{
+		Name:        nextStackDraftName(cfg, "draft-stack"),
+		Description: translatef(language, "Starter stack draft seeded from %d visible profiles.", "组合草稿模板，来源于 %d 个可见配置。", len(members)),
+		Labels:      []string{"draft"},
+		Profiles:    members,
+	}, nil
+}
+
+func starterRunningStackDraft(cfg domain.Config, profiles []app.ProfileView, language domain.Language) (domain.Stack, error) {
+	members := make([]string, 0, len(profiles))
+	for _, profile := range profiles {
+		if isActiveTunnelStatus(profile.State.Status) {
+			members = append(members, profile.Profile.Name)
+		}
+	}
+	if len(members) == 0 {
+		return domain.Stack{}, fmt.Errorf("%s", translate(language, "No running profiles to seed the stack right now.", "当前没有运行中的配置可用于生成组合。"))
+	}
+
+	return domain.Stack{
+		Name:        nextStackDraftName(cfg, "draft-running-stack"),
+		Description: translatef(language, "Starter stack draft seeded from %d running profiles.", "组合草稿模板，来源于 %d 个运行中配置。", len(members)),
+		Labels:      []string{"draft"},
+		Profiles:    members,
+	}, nil
 }
 
 func starterStackMembers(profiles []app.ProfileView, stacks []app.StackView, focus listFocus, selectedProfile, selectedStack int, filterQuery string, totalProfiles int, language domain.Language) ([]string, string, error) {

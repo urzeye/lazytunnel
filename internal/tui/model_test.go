@@ -379,7 +379,7 @@ func TestRenderEmptyProfilesLinesIncludesAllActions(t *testing.T) {
 	lines := model.renderEmptyProfilesLines(48)
 	rendered := strings.Join(lines, "\n")
 
-	for _, snippet := range []string{"import drafts", "sample config", "draft profile", "guided editor", "raw YAML", "reload config"} {
+	for _, snippet := range []string{"import drafts", "sample config", "profile preset", "guided editor", "raw YAML", "reload config"} {
 		if !strings.Contains(rendered, snippet) {
 			t.Fatalf("expected %q in empty profiles lines, got %q", snippet, rendered)
 		}
@@ -1717,10 +1717,55 @@ func TestHintMessageMentionsImportAndSampleWhenWorkspaceEmpty(t *testing.T) {
 
 	model := Model{service: service}
 	got := model.hintMessage()
-	for _, snippet := range []string{"i import drafts", "s sample config", "a new tunnel draft"} {
+	for _, snippet := range []string{"i import drafts", "s sample config", "a profile preset"} {
 		if !strings.Contains(got, snippet) {
 			t.Fatalf("expected %q in empty-workspace hint, got %q", snippet, got)
 		}
+	}
+}
+
+func TestHandleWorkspaceKeyUsesAForProfilePresetMode(t *testing.T) {
+	t.Parallel()
+
+	service, err := app.NewService(domain.DefaultConfig(), newStubRuntimeController())
+	if err != nil {
+		t.Fatalf("new service: %v", err)
+	}
+
+	model := Model{service: service}
+	next, _, handled := model.handleWorkspaceKey(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'a'}}, nil, nil)
+	if !handled {
+		t.Fatal("expected a profile-preset key to be handled")
+	}
+	if next.createPresetMode != createPresetProfile {
+		t.Fatalf("expected profile preset mode, got %v", next.createPresetMode)
+	}
+	if !next.hasStatusLine() {
+		t.Fatal("expected preset mode to reserve the status line")
+	}
+	if !strings.Contains(next.renderStatusLine(120), "Create profile preset") {
+		t.Fatalf("expected preset prompt banner, got %q", next.renderStatusLine(120))
+	}
+}
+
+func TestHandleWorkspaceKeyUsesShiftAForStackPresetMode(t *testing.T) {
+	t.Parallel()
+
+	service, err := app.NewService(storage.SampleConfig(), newStubRuntimeController())
+	if err != nil {
+		t.Fatalf("new service: %v", err)
+	}
+
+	model := Model{service: service}
+	next, _, handled := model.handleWorkspaceKey(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'A'}}, nil, nil)
+	if !handled {
+		t.Fatal("expected A stack-preset key to be handled")
+	}
+	if next.createPresetMode != createPresetStack {
+		t.Fatalf("expected stack preset mode, got %v", next.createPresetMode)
+	}
+	if !strings.Contains(next.renderStatusLine(120), "Create stack preset") {
+		t.Fatalf("expected stack preset banner, got %q", next.renderStatusLine(120))
 	}
 }
 
@@ -2078,6 +2123,59 @@ func TestStackEditorSupportsDynamicMemberAddMoveRemoveAndSaveOrder(t *testing.T)
 	}
 }
 
+func TestStackEditorCommaSplitsIntoNextMemberRow(t *testing.T) {
+	t.Parallel()
+
+	model := Model{
+		editor: newStackEditorState(domain.Stack{
+			Name:     "backend-dev",
+			Profiles: []string{"prod-db"},
+		}, "backend-dev", domain.LanguageEnglish),
+	}
+	model.editor.focusFieldByKey(stackMemberFieldKey(0))
+	model.editor.setValue(stackMemberFieldKey(0), "prod-db")
+	model.editor.moveCursorToEnd(stackMemberFieldKey(0))
+
+	next, _, handled := model.handleEditorKey(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{','}})
+	if !handled {
+		t.Fatal("expected comma split to be handled")
+	}
+
+	members, _ := next.editor.stackMemberSnapshot()
+	if got := strings.Join(members, "|"); got != "prod-db|" {
+		t.Fatalf("expected split members to add a blank row, got %q", got)
+	}
+	field, ok := next.editor.currentField()
+	if !ok || field.key != stackMemberFieldKey(1) {
+		t.Fatalf("expected focus to move to the new member row, got %#v", field)
+	}
+}
+
+func TestStackEditorPastedMemberListExpandsRows(t *testing.T) {
+	t.Parallel()
+
+	model := Model{
+		editor: newStackEditorState(domain.Stack{
+			Name:     "backend-dev",
+			Profiles: []string{""},
+		}, "backend-dev", domain.LanguageEnglish),
+	}
+	model.editor.focusFieldByKey(stackMemberFieldKey(0))
+
+	next, _, handled := model.handleEditorKey(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune("prod-db, api-debug\nworker-debug")})
+	if !handled {
+		t.Fatal("expected pasted member list to be handled")
+	}
+
+	members, _ := next.editor.stackMemberSnapshot()
+	if got := strings.Join(members, ","); got != "prod-db,api-debug,worker-debug" {
+		t.Fatalf("expected pasted list to expand into rows, got %q", got)
+	}
+	if help := next.editorHelpLine(); !strings.Contains(help, "paste comma/newline lists to expand") {
+		t.Fatalf("expected member help to mention batch paste, got %q", help)
+	}
+}
+
 func TestSaveStackEditorDedupesMembersAndReportsIt(t *testing.T) {
 	t.Parallel()
 
@@ -2310,6 +2408,229 @@ func TestHandleImportKeyImportsSSHDrafts(t *testing.T) {
 	}
 }
 
+func TestHandleCreatePresetKeyCreatesProfileDraftVariants(t *testing.T) {
+	t.Parallel()
+
+	tests := []struct {
+		name       string
+		key        rune
+		wantType   domain.TunnelType
+		verifyFunc func(t *testing.T, profile domain.Profile)
+	}{
+		{
+			name:     "ssh local",
+			key:      'l',
+			wantType: domain.TunnelTypeSSHLocal,
+			verifyFunc: func(t *testing.T, profile domain.Profile) {
+				t.Helper()
+				if profile.SSH == nil || profile.SSH.Host != "example-bastion" {
+					t.Fatalf("expected ssh-local preset fields, got %#v", profile)
+				}
+			},
+		},
+		{
+			name:     "ssh remote",
+			key:      'r',
+			wantType: domain.TunnelTypeSSHRemote,
+			verifyFunc: func(t *testing.T, profile domain.Profile) {
+				t.Helper()
+				if profile.SSHRemote == nil || profile.SSHRemote.BindPort != 9000 {
+					t.Fatalf("expected ssh-remote preset fields, got %#v", profile)
+				}
+			},
+		},
+		{
+			name:     "ssh dynamic",
+			key:      'd',
+			wantType: domain.TunnelTypeSSHDynamic,
+			verifyFunc: func(t *testing.T, profile domain.Profile) {
+				t.Helper()
+				if profile.SSHDynamic == nil || profile.LocalPort != 1080 {
+					t.Fatalf("expected ssh-dynamic preset fields, got %#v", profile)
+				}
+			},
+		},
+		{
+			name:     "kubernetes",
+			key:      'k',
+			wantType: domain.TunnelTypeKubernetesPortForward,
+			verifyFunc: func(t *testing.T, profile domain.Profile) {
+				t.Helper()
+				if profile.Kubernetes == nil || profile.Kubernetes.Resource != "change-me" {
+					t.Fatalf("expected kubernetes preset fields, got %#v", profile)
+				}
+			},
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
+
+			configPath := filepath.Join(t.TempDir(), "config.yaml")
+			service, err := app.NewService(domain.DefaultConfig(), newStubRuntimeController())
+			if err != nil {
+				t.Fatalf("new service: %v", err)
+			}
+
+			model := Model{
+				service:          service,
+				configPath:       configPath,
+				createPresetMode: createPresetProfile,
+			}
+
+			next, handled := model.handleCreatePresetKey(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{tt.key}}, nil, nil)
+			if !handled {
+				t.Fatal("expected preset key to be handled")
+			}
+			if next.createPresetMode != createPresetNone {
+				t.Fatalf("expected preset mode to exit, got %v", next.createPresetMode)
+			}
+			if next.editor == nil || next.editor.kind != formEditorProfile {
+				t.Fatalf("expected profile editor to open, got %#v", next.editor)
+			}
+
+			views := next.service.ProfileViews()
+			if len(views) != 1 {
+				t.Fatalf("expected 1 profile view, got %d", len(views))
+			}
+			profile := views[next.selectedProfile].Profile
+			if profile.Type != tt.wantType {
+				t.Fatalf("expected type %q, got %#v", tt.wantType, profile)
+			}
+			tt.verifyFunc(t, profile)
+
+			cfg, err := storage.LoadConfig(configPath)
+			if err != nil {
+				t.Fatalf("load config: %v", err)
+			}
+			if len(cfg.Profiles) != 1 {
+				t.Fatalf("expected persisted preset profile, got %d", len(cfg.Profiles))
+			}
+			if cfg.Profiles[0].Type != tt.wantType {
+				t.Fatalf("expected persisted type %q, got %#v", tt.wantType, cfg.Profiles[0])
+			}
+		})
+	}
+}
+
+func TestHandleCreatePresetKeyCreatesStackPresetVariants(t *testing.T) {
+	t.Parallel()
+
+	tests := []struct {
+		name      string
+		key       rune
+		newModel  func(t *testing.T, configPath string) Model
+		wantNames string
+		wantLabel string
+	}{
+		{
+			name: "selection",
+			key:  's',
+			newModel: func(t *testing.T, configPath string) Model {
+				t.Helper()
+				service, err := app.NewService(storage.SampleConfig(), newStubRuntimeController())
+				if err != nil {
+					t.Fatalf("new service: %v", err)
+				}
+				return Model{
+					service:          service,
+					configPath:       configPath,
+					selectedProfile:  1,
+					createPresetMode: createPresetStack,
+				}
+			},
+			wantNames: "api-debug",
+			wantLabel: "Created starter stack",
+		},
+		{
+			name: "visible",
+			key:  'v',
+			newModel: func(t *testing.T, configPath string) Model {
+				t.Helper()
+				service, err := app.NewService(storage.SampleConfig(), newStubRuntimeController())
+				if err != nil {
+					t.Fatalf("new service: %v", err)
+				}
+				return Model{
+					service:          service,
+					configPath:       configPath,
+					createPresetMode: createPresetStack,
+				}
+			},
+			wantNames: "prod-db,api-debug",
+			wantLabel: "Created visible-profiles stack",
+		},
+		{
+			name: "running",
+			key:  'r',
+			newModel: func(t *testing.T, configPath string) Model {
+				t.Helper()
+				runtime := newStubRuntimeController()
+				runtime.states["api-debug"] = domain.RuntimeState{
+					ProfileName: "api-debug",
+					Status:      domain.TunnelStatusRunning,
+					PID:         7,
+				}
+
+				service, err := app.NewService(storage.SampleConfig(), runtime)
+				if err != nil {
+					t.Fatalf("new service: %v", err)
+				}
+				return Model{
+					service:          service,
+					configPath:       configPath,
+					createPresetMode: createPresetStack,
+				}
+			},
+			wantNames: "api-debug",
+			wantLabel: "Created running-profiles stack",
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
+
+			configPath := filepath.Join(t.TempDir(), "config.yaml")
+			model := tt.newModel(t, configPath)
+			profiles := filterProfileViews(model.service.ProfileViews(), model.filterQuery)
+			stacks := filterStackViews(model.service.StackViews(), model.filterQuery)
+
+			next, handled := model.handleCreatePresetKey(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{tt.key}}, profiles, stacks)
+			if !handled {
+				t.Fatal("expected stack preset key to be handled")
+			}
+			if next.createPresetMode != createPresetNone {
+				t.Fatalf("expected preset mode to exit, got %v", next.createPresetMode)
+			}
+			if next.editor == nil || next.editor.kind != formEditorStack {
+				t.Fatalf("expected stack editor to open, got %#v", next.editor)
+			}
+			if !strings.Contains(next.lastNotice, tt.wantLabel) {
+				t.Fatalf("expected creation notice %q, got %q", tt.wantLabel, next.lastNotice)
+			}
+
+			stackViews := next.service.StackViews()
+			if len(stackViews) < 2 {
+				t.Fatalf("expected preset stack to be persisted, got %d stacks", len(stackViews))
+			}
+			selected := stackViews[next.selectedStack].Stack
+			if got := strings.Join(selected.Profiles, ","); got != tt.wantNames {
+				t.Fatalf("expected stack members %q, got %q", tt.wantNames, got)
+			}
+
+			cfg, err := storage.LoadConfig(configPath)
+			if err != nil {
+				t.Fatalf("load config: %v", err)
+			}
+			if len(cfg.Stacks) < 2 {
+				t.Fatalf("expected persisted preset stack, got %d stacks", len(cfg.Stacks))
+			}
+		})
+	}
+}
+
 func TestHandleMouseClickSelectsProfileAndStackRows(t *testing.T) {
 	t.Parallel()
 
@@ -2524,6 +2845,54 @@ func TestHandleMouseClickTriggersImportPromptAction(t *testing.T) {
 	}
 	if len(next.service.ProfileViews()) != 1 {
 		t.Fatalf("expected 1 imported profile, got %d", len(next.service.ProfileViews()))
+	}
+}
+
+func TestHandleMouseClickTriggersPresetPromptAction(t *testing.T) {
+	t.Parallel()
+
+	configPath := filepath.Join(t.TempDir(), "config.yaml")
+	service, err := app.NewService(domain.DefaultConfig(), newStubRuntimeController())
+	if err != nil {
+		t.Fatalf("new service: %v", err)
+	}
+
+	model := Model{
+		service:          service,
+		configPath:       configPath,
+		createPresetMode: createPresetProfile,
+		width:            140,
+		height:           30,
+	}
+	profiles := filterProfileViews(service.ProfileViews(), "")
+	stacks := filterStackViews(service.StackViews(), "")
+	layout := model.mouseLayout(profiles, stacks)
+
+	if len(layout.presetActions) == 0 {
+		t.Fatal("expected preset actions to be clickable")
+	}
+
+	msg := tea.MouseMsg{
+		X:      layout.presetActions[0].rect.x + 1,
+		Y:      layout.presetActions[0].rect.y,
+		Action: tea.MouseActionPress,
+		Button: tea.MouseButtonLeft,
+	}
+	next, handled := model.handleMouse(msg, profiles, stacks)
+	if !handled {
+		t.Fatal("expected preset click to be handled")
+	}
+	if next.createPresetMode != createPresetNone {
+		t.Fatalf("expected preset mode to exit after click, got %v", next.createPresetMode)
+	}
+	if next.editor == nil || next.editor.kind != formEditorProfile {
+		t.Fatalf("expected profile editor to open, got %#v", next.editor)
+	}
+	if len(next.service.ProfileViews()) != 1 {
+		t.Fatalf("expected 1 created profile, got %d", len(next.service.ProfileViews()))
+	}
+	if next.service.ProfileViews()[0].Profile.Type != domain.TunnelTypeSSHLocal {
+		t.Fatalf("expected first preset click to create ssh-local profile, got %#v", next.service.ProfileViews()[0].Profile)
 	}
 }
 

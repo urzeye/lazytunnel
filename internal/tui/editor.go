@@ -340,7 +340,7 @@ func (e *formEditorState) stackFields(language domain.Language) []formField {
 		fields = append(fields, formField{
 			key:         stackMemberFieldKey(idx),
 			label:       translatef(language, "Member %d", "成员 %d", idx+1),
-			help:        translate(language, "Profile name in start order. + adds below, Ctrl+X removes, and [ or ] reorders.", "按启动顺序填写成员 profile 名。+ 在下方新增，Ctrl+X 删除，[ 或 ] 调整顺序。"),
+			help:        translate(language, "Profile name in start order. Type , to split into the next row, paste comma/newline lists to expand, + adds below, Ctrl+X removes, and [ or ] reorders.", "按启动顺序填写成员 profile 名。输入 , 可拆到下一行，粘贴逗号/换行列表会自动展开，+ 在下方新增，Ctrl+X 删除，[ 或 ] 调整顺序。"),
 			placeholder: translate(language, "prod-db", "prod-db"),
 			required:    true,
 			kind:        formFieldText,
@@ -934,6 +934,59 @@ func (e *formEditorState) moveCurrentStackMember(language domain.Language, delta
 	e.focusFieldByKey(stackMemberFieldKey(target))
 }
 
+func (e *formEditorState) distributeStackMemberInput(language domain.Language, text string) bool {
+	index, ok := e.currentStackMemberIndex()
+	if !ok || !strings.ContainsAny(text, ",\n\r") {
+		return false
+	}
+
+	members, cursors := e.stackMemberSnapshot()
+	current := members[index]
+	cursor := min(max(cursors[index], 0), runeLen(current))
+	currentRunes := []rune(current)
+	merged := string(currentRunes[:cursor]) + text + string(currentRunes[cursor:])
+	parts := splitStackMemberInput(merged)
+	if len(parts) <= 1 {
+		return false
+	}
+
+	newMembers := make([]string, 0, len(members)-1+len(parts))
+	newCursors := make([]int, 0, len(cursors)-1+len(parts))
+	newMembers = append(newMembers, members[:index]...)
+	newCursors = append(newCursors, cursors[:index]...)
+	for _, part := range parts {
+		newMembers = append(newMembers, part)
+		newCursors = append(newCursors, runeLen(part))
+	}
+	newMembers = append(newMembers, members[index+1:]...)
+	newCursors = append(newCursors, cursors[index+1:]...)
+
+	e.setStackMembersWithCursors(newMembers, newCursors)
+	e.rebuild(language)
+	e.focusFieldByKey(stackMemberFieldKey(index + len(parts) - 1))
+	return true
+}
+
+func splitStackMemberInput(value string) []string {
+	normalized := strings.NewReplacer("\r\n", "\n", "\r", "\n", "\n", ",").Replace(value)
+	raw := strings.Split(normalized, ",")
+	parts := make([]string, 0, len(raw))
+	for idx, part := range raw {
+		trimmed := strings.TrimSpace(part)
+		if trimmed == "" {
+			if idx == len(raw)-1 && len(parts) > 0 {
+				parts = append(parts, "")
+			}
+			continue
+		}
+		parts = append(parts, trimmed)
+	}
+	if len(parts) == 0 {
+		return []string{""}
+	}
+	return parts
+}
+
 func runeLen(value string) int {
 	return len([]rune(value))
 }
@@ -1033,8 +1086,8 @@ func (m Model) editorTitle() string {
 func (m Model) editorInstructionLine() string {
 	if m.editor != nil && m.editor.kind == formEditorStack {
 		return m.t(
-			"Up/Down or Tab move • type to edit • [ ] reorder member • + add member • Ctrl+X remove • Enter/Ctrl+S save • Esc cancel • E YAML",
-			"上下或 Tab 移动 • 直接输入即可编辑 • [ ] 调整成员顺序 • + 新增成员 • Ctrl+X 删除 • Enter/Ctrl+S 保存 • Esc 取消 • E 打开 YAML",
+			"Up/Down or Tab move • type to edit • , split/paste list • [ ] reorder member • + add member • Ctrl+X remove • Enter/Ctrl+S save • Esc cancel • E YAML",
+			"上下或 Tab 移动 • 直接输入即可编辑 • , 拆分/粘贴列表 • [ ] 调整成员顺序 • + 新增成员 • Ctrl+X 删除 • Enter/Ctrl+S 保存 • Esc 取消 • E 打开 YAML",
 		)
 	}
 
@@ -1337,6 +1390,11 @@ func (m Model) handleEditorKey(msg tea.KeyMsg) (Model, tea.Cmd, bool) {
 				}
 			}
 			return m, nil, true
+		}
+		if m.editor.kind == formEditorStack {
+			if _, isMemberField := m.editor.currentStackMemberIndex(); isMemberField && m.editor.distributeStackMemberInput(m.language(), string(msg.Runes)) {
+				return m, nil, true
+			}
 		}
 
 		m.editor.insertText(field.key, string(msg.Runes))
