@@ -2,8 +2,10 @@ package tui
 
 import (
 	"fmt"
+	"sort"
 	"strconv"
 	"strings"
+	"time"
 
 	tea "github.com/charmbracelet/bubbletea"
 	"github.com/charmbracelet/lipgloss"
@@ -340,7 +342,7 @@ func (e *formEditorState) stackFields(language domain.Language) []formField {
 		fields = append(fields, formField{
 			key:         stackMemberFieldKey(idx),
 			label:       translatef(language, "Member %d", "成员 %d", idx+1),
-			help:        translate(language, "Profile name in start order. Type , to split into the next row, paste comma/newline lists to expand, + adds below, Ctrl+X removes, and [ or ] reorders.", "按启动顺序填写成员 profile 名。输入 , 可拆到下一行，粘贴逗号/换行列表会自动展开，+ 在下方新增，Ctrl+X 删除，[ 或 ] 调整顺序。"),
+			help:        translate(language, "Profile name in start order. Type , to split into the next row, paste comma/newline lists to expand, Ctrl+R inserts suggested profiles, Ctrl+D dedupes members, + adds below, Ctrl+X removes, and [ or ] reorders.", "按启动顺序填写成员 profile 名。输入 , 可拆到下一行，粘贴逗号/换行列表会自动展开，Ctrl+R 插入推荐配置，Ctrl+D 立即去重，+ 在下方新增，Ctrl+X 删除，[ 或 ] 调整顺序。"),
 			placeholder: translate(language, "prod-db", "prod-db"),
 			required:    true,
 			kind:        formFieldText,
@@ -967,6 +969,121 @@ func (e *formEditorState) distributeStackMemberInput(language domain.Language, t
 	return true
 }
 
+func (e *formEditorState) insertStackMembers(language domain.Language, inserts []string) int {
+	index, ok := e.currentStackMemberIndex()
+	if !ok {
+		return 0
+	}
+
+	inserts = dedupePreserveOrder(parseEditorList(strings.Join(inserts, ",")))
+	if len(inserts) == 0 {
+		return 0
+	}
+
+	members, cursors := e.stackMemberSnapshot()
+	if index >= len(members) {
+		return 0
+	}
+
+	before := append([]string(nil), members[:index]...)
+	after := append([]string(nil), members[index+1:]...)
+	beforeCursors := append([]int(nil), cursors[:index]...)
+	afterCursors := append([]int(nil), cursors[index+1:]...)
+
+	newMembers := make([]string, 0, len(members)+len(inserts))
+	newCursors := make([]int, 0, len(cursors)+len(inserts))
+	focusIndex := index
+
+	newMembers = append(newMembers, before...)
+	newCursors = append(newCursors, beforeCursors...)
+	if strings.TrimSpace(members[index]) == "" {
+		for _, insert := range inserts {
+			newMembers = append(newMembers, insert)
+			newCursors = append(newCursors, runeLen(insert))
+		}
+		focusIndex = index + len(inserts) - 1
+	} else {
+		newMembers = append(newMembers, members[index])
+		newCursors = append(newCursors, cursors[index])
+		for _, insert := range inserts {
+			newMembers = append(newMembers, insert)
+			newCursors = append(newCursors, runeLen(insert))
+		}
+		focusIndex = index + len(inserts)
+	}
+	newMembers = append(newMembers, after...)
+	newCursors = append(newCursors, afterCursors...)
+
+	e.setStackMembersWithCursors(newMembers, newCursors)
+	e.rebuild(language)
+	e.focusFieldByKey(stackMemberFieldKey(min(focusIndex, len(newMembers)-1)))
+	return len(inserts)
+}
+
+func (e *formEditorState) dedupeStackMembers(language domain.Language) int {
+	members, _ := e.stackMemberSnapshot()
+	if len(members) == 0 {
+		return 0
+	}
+
+	currentIndex, hasCurrent := e.currentStackMemberIndex()
+	currentName := ""
+	if hasCurrent && currentIndex < len(members) {
+		currentName = strings.TrimSpace(members[currentIndex])
+	}
+
+	seen := make(map[string]struct{}, len(members))
+	newMembers := make([]string, 0, len(members))
+	newCursors := make([]int, 0, len(members))
+	removed := 0
+	blankAdded := false
+	focusIndex := 0
+	focusLocked := false
+
+	for idx, member := range members {
+		trimmed := strings.TrimSpace(member)
+		switch {
+		case trimmed == "":
+			if blankAdded {
+				removed++
+				continue
+			}
+			blankAdded = true
+			newMembers = append(newMembers, "")
+			newCursors = append(newCursors, 0)
+			if hasCurrent && idx == currentIndex {
+				focusIndex = len(newMembers) - 1
+				focusLocked = true
+			}
+		default:
+			if _, exists := seen[trimmed]; exists {
+				removed++
+				continue
+			}
+			seen[trimmed] = struct{}{}
+			newMembers = append(newMembers, trimmed)
+			newCursors = append(newCursors, runeLen(trimmed))
+			if hasCurrent && idx == currentIndex {
+				focusIndex = len(newMembers) - 1
+				focusLocked = true
+			} else if !focusLocked && currentName != "" && trimmed == currentName {
+				focusIndex = len(newMembers) - 1
+			}
+		}
+	}
+
+	if len(newMembers) == 0 {
+		newMembers = []string{""}
+		newCursors = []int{0}
+		focusIndex = 0
+	}
+
+	e.setStackMembersWithCursors(newMembers, newCursors)
+	e.rebuild(language)
+	e.focusFieldByKey(stackMemberFieldKey(min(focusIndex, len(newMembers)-1)))
+	return removed
+}
+
 func splitStackMemberInput(value string) []string {
 	normalized := strings.NewReplacer("\r\n", "\n", "\r", "\n", "\n", ",").Replace(value)
 	raw := strings.Split(normalized, ",")
@@ -1086,8 +1203,8 @@ func (m Model) editorTitle() string {
 func (m Model) editorInstructionLine() string {
 	if m.editor != nil && m.editor.kind == formEditorStack {
 		return m.t(
-			"Up/Down or Tab move • type to edit • , split/paste list • [ ] reorder member • + add member • Ctrl+X remove • Enter/Ctrl+S save • Esc cancel • E YAML",
-			"上下或 Tab 移动 • 直接输入即可编辑 • , 拆分/粘贴列表 • [ ] 调整成员顺序 • + 新增成员 • Ctrl+X 删除 • Enter/Ctrl+S 保存 • Esc 取消 • E 打开 YAML",
+			"Up/Down or Tab move • type to edit • , split/paste list • Ctrl+R suggestions • Ctrl+D dedupe • [ ] reorder member • + add member • Ctrl+X remove • Enter/Ctrl+S save • Esc cancel • E YAML",
+			"上下或 Tab 移动 • 直接输入即可编辑 • , 拆分/粘贴列表 • Ctrl+R 推荐项 • Ctrl+D 去重 • [ ] 调整成员顺序 • + 新增成员 • Ctrl+X 删除 • Enter/Ctrl+S 保存 • Esc 取消 • E 打开 YAML",
 		)
 	}
 
@@ -1184,23 +1301,105 @@ func stackEditorMembers(editor *formEditorState) []string {
 }
 
 func (m Model) stackMemberSuggestionsLine() string {
-	if m.service == nil {
-		return ""
-	}
-
-	names := profileNames(m.service.Config())
+	names := m.stackMemberSuggestions(5)
 	if len(names) == 0 {
 		return ""
 	}
-	if len(names) > 6 {
-		names = append(names[:6], "...")
-	}
 
 	return m.tf(
-		"Available profiles: %s",
-		"可用配置：%s",
+		"Suggested next profiles: %s • Ctrl+R insert • Ctrl+D dedupe",
+		"推荐后续配置：%s • Ctrl+R 插入 • Ctrl+D 去重",
 		strings.Join(names, ", "),
 	)
+}
+
+func (m Model) stackMemberSuggestions(limit int) []string {
+	if m.service == nil {
+		return nil
+	}
+
+	existing := make(map[string]struct{})
+	if m.editor != nil {
+		for _, member := range stackEditorMembers(m.editor) {
+			member = strings.TrimSpace(member)
+			if member == "" {
+				continue
+			}
+			existing[member] = struct{}{}
+		}
+	}
+
+	type candidate struct {
+		name        string
+		order       int
+		active      bool
+		hasActivity bool
+		lastUsedAt  time.Time
+	}
+
+	candidates := make([]candidate, 0)
+	for idx, view := range m.service.ProfileViews() {
+		name := strings.TrimSpace(view.Profile.Name)
+		if name == "" {
+			continue
+		}
+		if _, exists := existing[name]; exists {
+			continue
+		}
+
+		active, lastUsedAt, hasActivity := stackMemberUsageRank(view.State)
+		candidates = append(candidates, candidate{
+			name:        name,
+			order:       idx,
+			active:      active,
+			hasActivity: hasActivity,
+			lastUsedAt:  lastUsedAt,
+		})
+	}
+
+	sort.SliceStable(candidates, func(i, j int) bool {
+		switch {
+		case candidates[i].active != candidates[j].active:
+			return candidates[i].active
+		case candidates[i].hasActivity != candidates[j].hasActivity:
+			return candidates[i].hasActivity
+		case !candidates[i].lastUsedAt.Equal(candidates[j].lastUsedAt):
+			return candidates[i].lastUsedAt.After(candidates[j].lastUsedAt)
+		default:
+			return candidates[i].order < candidates[j].order
+		}
+	})
+
+	if limit > 0 && len(candidates) > limit {
+		candidates = candidates[:limit]
+	}
+
+	names := make([]string, 0, len(candidates))
+	for _, candidate := range candidates {
+		names = append(names, candidate.name)
+	}
+	return names
+}
+
+func stackMemberUsageRank(state domain.RuntimeState) (bool, time.Time, bool) {
+	active := stackMemberActiveStatus(state.Status)
+	var latest time.Time
+	if state.StartedAt != nil && state.StartedAt.After(latest) {
+		latest = *state.StartedAt
+	}
+	if state.ExitedAt != nil && state.ExitedAt.After(latest) {
+		latest = *state.ExitedAt
+	}
+	return active, latest, !latest.IsZero()
+}
+
+func stackMemberActiveStatus(status domain.TunnelStatus) bool {
+	switch status {
+	case domain.TunnelStatusStarting, domain.TunnelStatusRunning, domain.TunnelStatusRestarting:
+		return true
+	default:
+		return false
+	}
 }
 
 func (m Model) renderEditorField(field formField, active bool, width int) string {
@@ -1277,6 +1476,29 @@ func (m Model) handleEditorKey(msg tea.KeyMsg) (Model, tea.Cmd, bool) {
 	if m.editor.kind == formEditorStack {
 		if _, isMemberField := m.editor.currentStackMemberIndex(); isMemberField {
 			switch msg.String() {
+			case "ctrl+r":
+				suggestions := m.stackMemberSuggestions(3)
+				if len(suggestions) == 0 {
+					m.lastError = m.t("No suggested profiles are available to insert right now.", "当前没有可插入的推荐配置。")
+					return m, nil, true
+				}
+				inserted := m.editor.insertStackMembers(m.language(), suggestions)
+				if inserted == 0 {
+					m.lastError = m.t("No suggested profiles were inserted.", "没有插入任何推荐配置。")
+					return m, nil, true
+				}
+				m.lastError = ""
+				m.lastNotice = m.tf("Inserted %d suggested stack members.", "已插入 %d 个推荐成员。", inserted)
+				return m, nil, true
+			case "ctrl+d":
+				removed := m.editor.dedupeStackMembers(m.language())
+				m.lastError = ""
+				if removed == 0 {
+					m.lastNotice = m.t("No duplicate stack members to remove.", "当前没有重复成员可去重。")
+				} else {
+					m.lastNotice = m.tf("Removed %d duplicate stack members.", "已移除 %d 个重复成员。", removed)
+				}
+				return m, nil, true
 			case "+":
 				m.editor.addStackMember(m.language())
 				return m, nil, true

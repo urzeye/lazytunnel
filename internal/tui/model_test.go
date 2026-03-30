@@ -2600,6 +2600,109 @@ func TestStackEditorPastedMemberListExpandsRows(t *testing.T) {
 	}
 }
 
+func TestStackEditorCtrlRInsertsSuggestedProfiles(t *testing.T) {
+	t.Parallel()
+
+	startedAt := time.Date(2026, 3, 30, 10, 0, 0, 0, time.UTC)
+	runtime := newStubRuntimeController()
+	runtime.states["worker-debug"] = domain.RuntimeState{
+		ProfileName: "worker-debug",
+		Status:      domain.TunnelStatusRunning,
+		StartedAt:   &startedAt,
+	}
+
+	cfg := domain.Config{
+		Version: domain.CurrentConfigVersion,
+		Profiles: []domain.Profile{
+			{
+				Name:      "prod-db",
+				Type:      domain.TunnelTypeSSHLocal,
+				LocalPort: 15432,
+				SSH: &domain.SSHLocal{
+					Host:       "bastion-prod",
+					RemoteHost: "db.internal",
+					RemotePort: 5432,
+				},
+			},
+			{
+				Name:      "api-debug",
+				Type:      domain.TunnelTypeKubernetesPortForward,
+				LocalPort: 8080,
+				Kubernetes: &domain.Kubernetes{
+					Context:      "dev-cluster",
+					Namespace:    "backend",
+					ResourceType: "service",
+					Resource:     "api",
+					RemotePort:   80,
+				},
+			},
+			{
+				Name:      "worker-debug",
+				Type:      domain.TunnelTypeSSHLocal,
+				LocalPort: 19000,
+				SSH: &domain.SSHLocal{
+					Host:       "bastion-dev",
+					RemoteHost: "worker.internal",
+					RemotePort: 9000,
+				},
+			},
+		},
+	}
+
+	service, err := app.NewService(cfg, runtime)
+	if err != nil {
+		t.Fatalf("new service: %v", err)
+	}
+
+	model := Model{
+		service: service,
+		editor: newStackEditorState(domain.Stack{
+			Name:     "draft-stack",
+			Labels:   []string{"draft"},
+			Profiles: []string{"prod-db"},
+		}, "draft-stack", domain.LanguageEnglish),
+	}
+	model.editor.focusFieldByKey(stackMemberFieldKey(0))
+
+	next, _, handled := model.handleEditorKey(tea.KeyMsg{Type: tea.KeyCtrlR})
+	if !handled {
+		t.Fatal("expected Ctrl+R to insert suggested stack members")
+	}
+
+	members, _ := next.editor.stackMemberSnapshot()
+	if got := strings.Join(members, ","); got != "prod-db,worker-debug,api-debug" {
+		t.Fatalf("expected suggested members prod-db,worker-debug,api-debug, got %q", got)
+	}
+	if !strings.Contains(next.lastNotice, "Inserted 2 suggested stack members.") {
+		t.Fatalf("expected insert-suggestions notice, got %q", next.lastNotice)
+	}
+}
+
+func TestStackEditorCtrlDDedupesMembersImmediately(t *testing.T) {
+	t.Parallel()
+
+	model := Model{
+		editor: newStackEditorState(domain.Stack{
+			Name:     "backend-dev",
+			Profiles: []string{"prod-db", "api-debug", "prod-db", ""},
+		}, "backend-dev", domain.LanguageEnglish),
+	}
+	model.editor.focusFieldByKey(stackMemberFieldKey(2))
+
+	next, _, handled := model.handleEditorKey(tea.KeyMsg{Type: tea.KeyCtrlD})
+	if !handled {
+		t.Fatal("expected Ctrl+D to dedupe stack members")
+	}
+
+	members, _ := next.editor.stackMemberSnapshot()
+	if got := strings.Join(members, ","); got != "prod-db,api-debug," {
+		t.Fatalf("expected deduped members prod-db,api-debug,<blank>, got %q", got)
+	}
+	if !strings.Contains(next.lastNotice, "Removed 1 duplicate stack members.") {
+		t.Fatalf("expected dedupe notice, got %q", next.lastNotice)
+	}
+}
+
 func TestSaveStackEditorDedupesMembersAndReportsIt(t *testing.T) {
 	t.Parallel()
 
@@ -2667,11 +2770,11 @@ func TestEditorHelpLineShowsAvailableProfilesForStackMembers(t *testing.T) {
 	}
 
 	help := model.editorHelpLine()
-	if !strings.Contains(help, "Available profiles:") {
-		t.Fatalf("expected available-profile hint, got %q", help)
+	if !strings.Contains(help, "Suggested next profiles:") {
+		t.Fatalf("expected suggested-profile hint, got %q", help)
 	}
-	if !strings.Contains(help, "prod-db") || !strings.Contains(help, "api-debug") {
-		t.Fatalf("expected available profile names in help, got %q", help)
+	if !strings.Contains(help, "api-debug") || !strings.Contains(help, "Ctrl+R insert") || !strings.Contains(help, "Ctrl+D dedupe") {
+		t.Fatalf("expected suggested profile names and shortcuts in help, got %q", help)
 	}
 }
 
