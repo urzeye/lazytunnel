@@ -192,10 +192,10 @@ pkg/
 
 ## 接下来立刻要做的事
 
-- 打磨 TUI 里的日志格式、样式和过滤体验
-- 补强 stack 相关键盘 / 鼠标交互和操作提示
-- 用带 tag 的版本验证 GitHub Releases 和 `mise` 安装链路
-- 为 README 补截图和演示 GIF
+- 继续降低配置门槛，把 preset、导入草稿补全和 stack 编辑流做得更顺手
+- 把启动前健康检查继续做深，让 SSH / Kubernetes 的真实问题尽量在启动前暴露
+- 继续补强运行时可观察性，例如重试历史、退避信息和失败摘要
+- 持续打磨 stack 编辑和成员控制的交互闭环
 
 ## v0.2 当前进展
 
@@ -205,9 +205,13 @@ pkg/
 - `ssh` / `kubectl` 是否存在于 PATH 的检查
 - 在 TUI 详情里区分可阻塞启动的问题和仍可启动的提醒
 - 对 draft、空 Kubernetes context / namespace、SSH 暴露型 bind address 提供提醒和修复建议
+- 通过 `ssh -G` 静态检查 SSH alias 是否可解析，并在必要时回退到 `~/.ssh/config` 导入视图
+- 对 `~/.ssh/config` 里显式声明但不存在的 `IdentityFile` 路径给出提醒
+- 在 Kubernetes profile 未显式填写 context 时，优先使用真实的 `kubectl current-context`
+- 对 Kubernetes namespace / resource 做存在性校验，并把修复建议同时挂到 CLI 和 TUI
 
 下一步可以继续补的方向：
 
-- 更深入的 Kubernetes context / namespace / resource 可达性检查
-- 更明确的 SSH 连通性与配置风险提示
-- 启动 hooks 和更细粒度的预检查扩展点
+- 更深入的 SSH 连通性和配置风险提示，但尽量避免把启动前检查做得太慢
+- 更顺手的 preset、导入后补全向导和 stack 编辑体验，继续降低写 YAML 的频率
+- 更完整的运行时可观察性，包括重试历史、退避过程和失败原因聚合

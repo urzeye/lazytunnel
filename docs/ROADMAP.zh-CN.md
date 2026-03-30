@@ -39,6 +39,7 @@
 - 启动前检查 `ssh` / `kubectl` 是否可用
 - 区分阻塞问题和风险提醒
 - 对 draft、空 Kubernetes context / namespace、暴露型 bind address 给出提醒
+- 对 SSH alias、显式 `IdentityFile` 路径和 Kubernetes 目标资源做更具体的启动前校验
 
 ### v0.3
 
@@ -48,6 +49,6 @@
 
 ## 当前重点
 
-- 优化日志面板的格式、样式和过滤体验
-- 继续把 SSH 和 `kubectl port-forward` 这两类核心工作流打磨到足够顺手
-- 把启动前健康检查继续做深，从“端口冲突”扩展到“命令缺失”和“风险提醒”
+- 继续降低配置门槛，把 preset、导入草稿补全和 stack 编辑做得更顺手
+- 把启动前健康检查继续做深，尽量在启动前暴露 SSH / Kubernetes 的真实目标问题
+- 持续打磨运行时可观察性、重连信息和日志体验

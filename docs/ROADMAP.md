@@ -36,6 +36,10 @@ The first usable version should focus on a small but high-value slice:
 ### v0.2
 
 - better health checks
+- check whether `ssh` / `kubectl` are available before launch
+- separate hard blockers from actionable warnings
+- flag draft configs, risky bind addresses, SSH alias and key-path issues
+- verify Kubernetes context, namespace, and target resources before startup
 
 ### v0.3
 
@@ -45,5 +49,6 @@ The first usable version should focus on a small but high-value slice:
 
 ## Current Focus
 
-- improve the logs inspector with better formatting, styling, and filtering
-- keep SSH and Kubernetes workflows feeling fast and low-friction in daily use
+- lower configuration friction with stronger presets, import completion, and stack editing flows
+- keep deepening preflight validation for concrete SSH and Kubernetes targets
+- continue polishing runtime observability, reconnect insight, and logs ergonomics

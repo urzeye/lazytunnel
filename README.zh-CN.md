@@ -174,6 +174,17 @@ Kubernetes 导入会先放一个占位资源目标，所以通常还需要再改
 lazytunnel validate
 ```
 
+在启动 profile 或 stack 之前先跑一遍预检查：
+
+```bash
+lazytunnel profile check prod-db
+lazytunnel stack check backend-dev
+```
+
+预检查会输出 `Ready`、`Warning`、`Blocked`，并附带下一步修复提示。
+当前会覆盖本地端口冲突、`ssh` / `kubectl` 缺失、SSH alias / `IdentityFile`
+问题，以及 Kubernetes context、namespace、resource 的校验。
+
 启动终端 UI：
 
 ```bash
@@ -206,8 +217,9 @@ LazyTunnel 围绕几个高频场景来设计：
 - 通过引导式 preset 创建新的 profile / stack，而不是从空白 YAML 开始写
 - 通过 CLI 或 TUI 从 `~/.ssh/config` 和 kubeconfig context 导入 draft profile
 - 通过 TUI 内置表单或 `profile edit --interactive` 继续完善导入草稿
-- 在启动前识别本地端口冲突
+- 在启动前执行预检查，识别端口冲突、`ssh` / `kubectl` 缺失、SSH alias / 密钥路径问题，以及 Kubernetes 目标不匹配
 - 校验失败时给出下一步可执行的修复提示
+- 直接在 TUI 里复制实际执行命令、复制或导出当前可见日志，并清空已捕获日志
 - 通过 CLI 完成 profile / stack 的新增、复制、修改和删除管理
 - 直接在 stack 详情里控制单个成员，并在引导式表单里调整成员顺序
 - 直接在 TUI 里带确认地删除 profile / stack
@@ -222,10 +234,10 @@ LazyTunnel 围绕几个高频场景来设计：
 
 ## 近期路线
 
-- 在 TUI 里补齐更完整的运行状态、重连信息和日志视图
-- 优化日志面板的格式、样式和过滤体验
-- 继续增强按项目组织 stack、标签和预检查能力
-- 打磨 tag 版本下的 release 和安装体验
+- 继续降低配置门槛，把更多场景做成 preset、草稿补全和顺手的 stack 编辑流
+- 把 SSH 和 Kubernetes 的预检查继续做深，尽量在启动前就暴露真实问题
+- 在 TUI 里继续补强运行时可观察性、重连信息和日志体验
+- 打磨 tag 版本下的 release、包分发和安装体验
 
 ## 明确不做什么
 

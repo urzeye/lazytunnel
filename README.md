@@ -169,6 +169,18 @@ Validate your config:
 lazytunnel validate
 ```
 
+Run preflight checks before you start a profile or stack:
+
+```bash
+lazytunnel profile check prod-db
+lazytunnel stack check backend-dev
+```
+
+Preflight checks report `Ready`, `Warning`, or `Blocked`, and include actionable
+hints for local port conflicts, missing `ssh` or `kubectl` binaries, SSH alias
+and `IdentityFile` issues, plus Kubernetes context, namespace, and resource
+verification.
+
 Launch the terminal UI:
 
 ```bash
@@ -201,8 +213,9 @@ LazyTunnel is designed around a few strong workflows:
 - create new profiles and stacks from guided presets instead of starting from a blank YAML draft
 - import draft profiles from `~/.ssh/config` and kubeconfig contexts from the CLI or TUI
 - finish imported drafts in a built-in TUI form editor or from `profile edit --interactive`
-- detect local port conflicts before startup
+- run preflight checks for local port conflicts, missing `ssh` / `kubectl`, SSH alias and key-path issues, and Kubernetes target mismatches before startup
 - show actionable validation hints that point to the next fix
+- copy generated exec commands, copy or export visible logs, and clear captured logs directly from the TUI
 - manage config from the CLI with add, clone, edit, and remove commands
 - control individual stack members directly from stack details and reorder members in the guided stack form
 - delete profiles and stacks directly from the TUI with confirmation
@@ -217,10 +230,10 @@ LazyTunnel is designed around a few strong workflows:
 
 ## Near-Term Roadmap
 
-- richer runtime status, reconnect insight, and log surfaces in the TUI
-- log formatting, visual polish, and filtering inside the logs inspector
-- better project stacks with labels and preflight validation
-- release and installation polish around tagged binaries
+- lower configuration friction with stronger presets, draft completion, and stack editing flows
+- keep deepening preflight validation for SSH and Kubernetes targets
+- continue runtime observability, reconnect insight, and log ergonomics in the TUI
+- polish tagged-release installation paths and package distribution
 
 ## Non-Goals
 

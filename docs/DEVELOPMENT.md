@@ -192,7 +192,26 @@ The following should not block `v0.1.0`:
 
 ## Immediate Next Steps
 
-- improve log formatting, visual hierarchy, and filtering in the TUI
-- add stack-focused keyboard and mouse polish with clearer action hints
-- exercise a tagged release through GitHub Releases and `mise`
-- capture screenshots and demo GIFs for the README
+- keep lowering config friction with stronger presets and draft-completion flows
+- deepen preflight checks so SSH and Kubernetes issues are surfaced before launch
+- continue runtime observability work such as restart history, backoff insight, and richer log actions
+- keep refining stack editing and member control loops in the TUI
+
+## Current v0.2 Progress
+
+Start preflight checks have already moved beyond basic port conflicts. The app
+currently covers:
+
+- local port conflict detection for individual profiles and stacks
+- `ssh` / `kubectl` command availability checks
+- `Ready` / `Warning` / `Blocked` readiness labels in both CLI and TUI
+- warnings for draft profiles, empty Kubernetes context / namespace, and risky SSH bind addresses
+- SSH alias inspection via `ssh -G`, with fallback to imported `~/.ssh/config` aliases
+- warnings for missing explicit `IdentityFile` paths declared in `~/.ssh/config`
+- Kubernetes verification for current context resolution, namespace existence, and target resource existence
+
+The next high-value steps in this phase are:
+
+- stronger SSH-side risk and reachability signals without making startup feel slow
+- import-completion and preset flows that reduce how often people need raw YAML edits
+- richer runtime observability around retries, backoff, and failure summaries
