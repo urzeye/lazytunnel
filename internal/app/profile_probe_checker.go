@@ -105,8 +105,19 @@ func (c *systemProfileProbeChecker) checkSSHHostAlias(host string) []string {
 		return nil
 	}
 
+	var warnings []string
+	inspection, output, err := c.inspectSSHHost(host)
+	if err != nil {
+		warnings = append(warnings, fmt.Sprintf("could not verify SSH host alias %q with ssh -G: %s", host, commandOutputSummary(output, err)))
+	} else if strings.TrimSpace(inspection.HostName) != "" && !strings.EqualFold(strings.TrimSpace(inspection.HostName), host) {
+		return nil
+	}
+
 	cfg, importResult, err := profileimport.ImportSSHConfig(domain.DefaultConfig(), "", false)
 	if err != nil {
+		if len(warnings) > 0 {
+			return warnings
+		}
 		return []string{
 			fmt.Sprintf(
 				"could not verify SSH host alias %q from %s: %v",
@@ -118,16 +129,17 @@ func (c *systemProfileProbeChecker) checkSSHHostAlias(host string) []string {
 	}
 
 	if hasNamedProfile(cfg.Profiles, host) {
-		return nil
+		return warnings
 	}
 
-	return []string{
+	warnings = append(warnings,
 		fmt.Sprintf(
 			"SSH host alias %q was not found in %s; ssh will treat it as a raw hostname",
 			host,
 			importResult.SourcePath,
 		),
-	}
+	)
+	return warnings
 }
 
 func (c *systemProfileProbeChecker) checkKubernetesTarget(profile domain.Profile) ProfileProbeResult {
@@ -241,6 +253,36 @@ func (c *systemProfileProbeChecker) runKubectlLookup(contextName, namespace, res
 
 	output, err := c.runner.CombinedOutput(ctx, "kubectl", args)
 	return string(output), err
+}
+
+type sshHostInspection struct {
+	HostName string
+}
+
+func (c *systemProfileProbeChecker) inspectSSHHost(host string) (sshHostInspection, string, error) {
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+
+	output, err := c.runner.CombinedOutput(ctx, "ssh", []string{"-G", host})
+	return parseSSHHostInspection(string(output)), string(output), err
+}
+
+func parseSSHHostInspection(output string) sshHostInspection {
+	inspection := sshHostInspection{}
+	for _, line := range strings.Split(output, "\n") {
+		fields := strings.Fields(line)
+		if len(fields) < 2 {
+			continue
+		}
+
+		switch strings.ToLower(fields[0]) {
+		case "hostname":
+			if inspection.HostName == "" {
+				inspection.HostName = strings.Join(fields[1:], " ")
+			}
+		}
+	}
+	return inspection
 }
 
 func profileProbeCacheKey(profile domain.Profile) string {

@@ -105,6 +105,65 @@ func TestProfileCheckCommandReportsSSHAliasWarnings(t *testing.T) {
 	}
 }
 
+func TestProfileCheckCommandReportsSSHInspectionWarnings(t *testing.T) {
+	tempDir := t.TempDir()
+	homeDir := filepath.Join(tempDir, "home")
+	if err := os.MkdirAll(filepath.Join(homeDir, ".ssh"), 0o755); err != nil {
+		t.Fatalf("mkdir ssh dir: %v", err)
+	}
+	if err := os.WriteFile(filepath.Join(homeDir, ".ssh", "config"), []byte("Host bastion-prod\n  HostName 127.0.0.1\n"), 0o644); err != nil {
+		t.Fatalf("write ssh config: %v", err)
+	}
+
+	binDir := filepath.Join(tempDir, "bin")
+	if err := os.MkdirAll(binDir, 0o755); err != nil {
+		t.Fatalf("mkdir bin dir: %v", err)
+	}
+	writeExecutable(t, filepath.Join(binDir, "ssh"), `#!/bin/sh
+if [ "$1" = "-G" ]; then
+  echo "Bad configuration option: UseKeychain" >&2
+  exit 255
+fi
+exit 0
+`)
+	t.Setenv("HOME", homeDir)
+	t.Setenv("PATH", binDir)
+
+	configPath := filepath.Join(tempDir, "config.yaml")
+	if err := storage.SaveConfig(configPath, domain.Config{
+		Version: domain.CurrentConfigVersion,
+		Profiles: []domain.Profile{
+			{
+				Name:      "prod-db",
+				Type:      domain.TunnelTypeSSHLocal,
+				LocalPort: 35432,
+				SSH: &domain.SSHLocal{
+					Host:       "bastion-prod",
+					RemoteHost: "db.internal",
+					RemotePort: 5432,
+				},
+			},
+		},
+	}); err != nil {
+		t.Fatalf("save config: %v", err)
+	}
+
+	output := executeCommand(t,
+		"--config", configPath,
+		"profile", "check", "prod-db",
+	)
+
+	if !strings.Contains(output, "readiness: Warning") {
+		t.Fatalf("expected warning readiness, got %q", output)
+	}
+	if !strings.Contains(output, `warning: could not verify SSH host alias "bastion-prod" with ssh -G`) {
+		t.Fatalf("expected ssh inspection warning, got %q", output)
+	}
+	if !strings.Contains(output, "hint: check ~/.ssh/config readability") {
+		t.Fatalf("expected ssh inspection hint, got %q", output)
+	}
+}
+
 func TestProfileCheckCommandReportsKubernetesResourceBlockers(t *testing.T) {
 	tempDir := t.TempDir()
 	binDir := filepath.Join(tempDir, "bin")
