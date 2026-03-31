@@ -208,6 +208,7 @@ pkg/
 - 通过 `ssh -G` 静态检查 SSH alias 是否可解析，并在必要时回退到 `~/.ssh/config` 导入视图
 - 对 `~/.ssh/config` 里显式声明但不存在的 `IdentityFile` 路径给出提醒
 - 在 Kubernetes profile 未显式填写 context 时，优先使用真实的 `kubectl current-context`
+- 导入自 `~/.ssh/config` / kube context 的 draft，在 TUI 表单里先落到 `Quick Fill`，可一键套用常见 SSH / Kubernetes 模板
 - 对 Kubernetes namespace / resource 做存在性校验，并把修复建议同时挂到 CLI 和 TUI
 
 下一步可以继续补的方向：

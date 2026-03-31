@@ -165,8 +165,10 @@ lazytunnel profile import kube-contexts --kubeconfig ~/.kube/config --overwrite
 
 导入后的 profile 会以可编辑草稿的形式写入配置。SSH 导入会先放一个占位转发目标，
 Kubernetes 导入会先放一个占位资源目标，所以通常还需要再改一遍配置再连接。
-在 TUI 里，按 `e` 可以直接用内置表单完善当前选中的草稿，按 `E` 则跳到原始 YAML。
-如果你已经打开了 TUI，而且是从 CLI 发起导入，导入完成后按 `g` 重新加载配置即可看到新条目。
+在 TUI 里，按 `e` 可以直接用内置表单完善当前选中的草稿；对于导入草稿，先从
+`Quick Fill` 选择一个常见 SSH / Kubernetes 模板，再继续补真实目标字段会更快。
+按 `E` 则跳到原始 YAML。如果你已经打开了 TUI，而且是从 CLI 发起导入，导入完成后
+按 `g` 重新加载配置即可看到新条目。
 
 校验当前配置：
 
@@ -197,7 +199,7 @@ lazytunnel
 - 按 `a` 选择一个 profile 预设，可直接从 SSH 本地、SSH 远程、SOCKS 或 Kubernetes 模板开始，再在表单里补全
 - 按 `A` 选择一个 stack 预设，可从当前选择、当前可见配置或运行中的配置生成
 - 当工作区为空时，按 `s` 写入示例配置
-- 按 `e` 用引导式表单编辑当前选中的 profile / stack
+- 按 `e` 用引导式表单编辑当前选中的 profile / stack；导入草稿会先聚焦到 `Quick Fill`
 - 按 `E` 在外部编辑器里打开原始 YAML 配置
 - 在详情面板里，按 `y` 可复制当前 profile 的实际执行命令，或当前选中 stack 成员的实际执行命令
 - 在日志面板里，按 `f` 切换跟随 / 暂停，按 `t` / `T` 切换来源，按 `w` 切换换行 / 截断，按 `n` / `N` 在筛选命中之间跳转，按 `y` 复制当前可见日志，按 `o` 导出，按 `x` 清空
@@ -216,7 +218,7 @@ LazyTunnel 围绕几个高频场景来设计：
 - 在日志面板里按文本和来源筛选日志，高亮命中内容，并在命中之间快速跳转
 - 通过引导式 preset 创建新的 profile / stack，而不是从空白 YAML 开始写
 - 通过 CLI 或 TUI 从 `~/.ssh/config` 和 kubeconfig context 导入 draft profile
-- 通过 TUI 内置表单或 `profile edit --interactive` 继续完善导入草稿
+- 通过 TUI 内置表单里的 `Quick Fill` 模板，或 `profile edit --interactive`，继续完善导入草稿
 - 在启动前执行预检查，识别端口冲突、`ssh` / `kubectl` 缺失、SSH alias / 密钥路径问题，以及 Kubernetes 目标不匹配
 - 校验失败时给出下一步可执行的修复提示
 - 直接在 TUI 里复制实际执行命令、复制或导出当前可见日志，并清空已捕获日志

@@ -81,6 +81,7 @@ const (
 	editorFieldDescription    = "description"
 	editorFieldLabels         = "labels"
 	editorFieldType           = "type"
+	editorFieldQuickFill      = "quick_fill"
 	editorFieldRestartEnabled = "restart_enabled"
 	editorFieldMaxRetries     = "max_retries"
 	editorFieldInitialBackoff = "initial_backoff"
@@ -170,7 +171,7 @@ func newProfileEditorState(profile domain.Profile, originName string, language d
 		editor.cursors[key] = runeLen(value)
 	}
 	editor.rebuild(language)
-	editor.focusFieldByKey(recommendedProfileEditorField(profile))
+	editor.focusFieldByKey(guidedProfileEditorField(profile, editor.values[editorFieldQuickFill]))
 	return editor
 }
 
@@ -296,7 +297,7 @@ func (e *formEditorState) rebuild(language domain.Language) {
 	default:
 		profile := domain.PrepareProfileForType(e.profileDraft(), editableTunnelType(domain.TunnelType(strings.TrimSpace(e.values[editorFieldType]))))
 		e.ensureProfileDefaults(profile)
-		e.fields = e.profileFields(language, profile.Type)
+		e.fields = e.profileFields(language, profile)
 	}
 
 	if len(e.fields) == 0 {
@@ -357,6 +358,9 @@ func (e *formEditorState) ensureProfileDefaults(profile domain.Profile) {
 	e.ensureValue(editorFieldDescription, profile.Description)
 	e.ensureValue(editorFieldLabels, strings.Join(profile.Labels, ", "))
 	e.ensureValue(editorFieldType, string(profile.Type))
+	if shouldShowProfileQuickFill(profile) {
+		e.ensureValue(editorFieldQuickFill, defaultProfileQuickFillValue(profile))
+	}
 	e.ensureValue(editorFieldRestartEnabled, boolEditorValue(profile.Restart.Enabled))
 	e.ensureValue(editorFieldMaxRetries, strconv.Itoa(profile.Restart.MaxRetries))
 	e.ensureValue(editorFieldInitialBackoff, profile.Restart.InitialBackoff)
@@ -406,7 +410,8 @@ func (e *formEditorState) ensureValue(key, value string) {
 	e.cursors[key] = runeLen(value)
 }
 
-func (e *formEditorState) profileFields(language domain.Language, tunnelType domain.TunnelType) []formField {
+func (e *formEditorState) profileFields(language domain.Language, profile domain.Profile) []formField {
+	tunnelType := profile.Type
 	fields := []formField{
 		{
 			key:         editorFieldName,
@@ -436,14 +441,26 @@ func (e *formEditorState) profileFields(language domain.Language, tunnelType dom
 				{value: string(domain.TunnelTypeKubernetesPortForward), label: humanTunnelType(language, domain.TunnelTypeKubernetesPortForward)},
 			},
 		},
-		{
-			key:         editorFieldLabels,
-			label:       translate(language, "Labels", "标签"),
-			help:        translate(language, "Comma-separated labels. Remove draft here when this profile is ready.", "逗号分隔的标签。配置准备好后，也可以在这里去掉 draft。"),
-			placeholder: translate(language, "prod, db", "prod, db"),
-			kind:        formFieldList,
-		},
 	}
+
+	if quickFillOptions := profileQuickFillOptions(language, profile); len(quickFillOptions) > 0 {
+		fields = append(fields, formField{
+			key:      editorFieldQuickFill,
+			label:    translate(language, "Quick Fill", "快速补全"),
+			help:     translate(language, "Use left/right or space to apply a common recipe for this imported draft.", "使用左右方向键或空格，为这个导入草稿套用一个常见模板。"),
+			kind:     formFieldChoice,
+			options:  quickFillOptions,
+			required: false,
+		})
+	}
+
+	fields = append(fields, formField{
+		key:         editorFieldLabels,
+		label:       translate(language, "Labels", "标签"),
+		help:        translate(language, "Comma-separated labels. Remove draft here when this profile is ready.", "逗号分隔的标签。配置准备好后，也可以在这里去掉 draft。"),
+		placeholder: translate(language, "prod, db", "prod, db"),
+		kind:        formFieldList,
+	})
 
 	switch tunnelType {
 	case domain.TunnelTypeSSHRemote:
@@ -646,6 +663,162 @@ func (e *formEditorState) currentField() (formField, bool) {
 		return formField{}, false
 	}
 	return e.fields[min(max(e.focus, 0), len(e.fields)-1)], true
+}
+
+func shouldShowProfileQuickFill(profile domain.Profile) bool {
+	return hasLabel(profile.Labels, "draft") && hasLabel(profile.Labels, "imported") &&
+		(hasLabel(profile.Labels, "ssh-config") || hasLabel(profile.Labels, "kube-context"))
+}
+
+func defaultProfileQuickFillValue(profile domain.Profile) string {
+	if hasLabel(profile.Labels, "ssh-config") {
+		return "custom"
+	}
+	if hasLabel(profile.Labels, "kube-context") {
+		return "custom"
+	}
+	return ""
+}
+
+func guidedProfileEditorField(profile domain.Profile, quickFillValue string) string {
+	if shouldShowProfileQuickFill(profile) && strings.TrimSpace(quickFillValue) == defaultProfileQuickFillValue(profile) {
+		return editorFieldQuickFill
+	}
+	return recommendedProfileEditorField(profile)
+}
+
+func profileQuickFillOptions(language domain.Language, profile domain.Profile) []formFieldOption {
+	switch {
+	case hasLabel(profile.Labels, "ssh-config"):
+		return []formFieldOption{
+			{value: "custom", label: translate(language, "Custom", "自定义")},
+			{value: "ssh-db", label: translate(language, "DB tunnel", "数据库隧道")},
+			{value: "ssh-http", label: translate(language, "HTTP app", "HTTP 应用")},
+			{value: "ssh-socks", label: translate(language, "SOCKS proxy", "SOCKS 代理")},
+			{value: "ssh-remote", label: translate(language, "Remote publish", "远程发布")},
+		}
+	case hasLabel(profile.Labels, "kube-context"):
+		return []formFieldOption{
+			{value: "custom", label: translate(language, "Custom", "自定义")},
+			{value: "kube-http", label: translate(language, "HTTP service", "HTTP 服务")},
+			{value: "kube-db", label: translate(language, "DB service", "数据库服务")},
+			{value: "kube-pod", label: translate(language, "Pod debug", "Pod 调试")},
+			{value: "kube-deploy", label: translate(language, "Deployment app", "Deployment 应用")},
+		}
+	default:
+		return nil
+	}
+}
+
+func (e *formEditorState) applySelectedProfileQuickFill(language domain.Language) {
+	if e == nil || e.kind != formEditorProfile {
+		return
+	}
+
+	recipe := strings.TrimSpace(e.values[editorFieldQuickFill])
+	if recipe == "" || recipe == "custom" {
+		e.rebuild(language)
+		return
+	}
+
+	profile := domain.PrepareProfileForType(
+		e.profileDraft(),
+		editableTunnelType(domain.TunnelType(strings.TrimSpace(e.values[editorFieldType]))),
+	)
+	profile = applyProfileQuickFillRecipe(profile, recipe)
+	e.syncProfileValues(profile)
+	e.rebuild(language)
+	e.focusFieldByKey(editorFieldQuickFill)
+}
+
+func applyProfileQuickFillRecipe(profile domain.Profile, recipe string) domain.Profile {
+	switch strings.TrimSpace(recipe) {
+	case "ssh-db":
+		profile = domain.PrepareProfileForType(profile, domain.TunnelTypeSSHLocal)
+		profile.LocalPort = 15432
+		profile.SSH.RemotePort = 5432
+	case "ssh-http":
+		profile = domain.PrepareProfileForType(profile, domain.TunnelTypeSSHLocal)
+		profile.LocalPort = 18080
+		profile.SSH.RemotePort = 8080
+	case "ssh-socks":
+		profile = domain.PrepareProfileForType(profile, domain.TunnelTypeSSHDynamic)
+		profile.LocalPort = 1080
+		if strings.TrimSpace(profile.SSHDynamic.BindAddress) == "" {
+			profile.SSHDynamic.BindAddress = "127.0.0.1"
+		}
+	case "ssh-remote":
+		profile = domain.PrepareProfileForType(profile, domain.TunnelTypeSSHRemote)
+		profile.LocalPort = 9000
+		profile.SSHRemote.BindPort = 9000
+		profile.SSHRemote.TargetPort = 8080
+		if strings.TrimSpace(profile.SSHRemote.BindAddress) == "" {
+			profile.SSHRemote.BindAddress = "127.0.0.1"
+		}
+	case "kube-http":
+		profile = domain.PrepareProfileForType(profile, domain.TunnelTypeKubernetesPortForward)
+		profile.LocalPort = 18080
+		profile.Kubernetes.ResourceType = "service"
+		profile.Kubernetes.RemotePort = 80
+	case "kube-db":
+		profile = domain.PrepareProfileForType(profile, domain.TunnelTypeKubernetesPortForward)
+		profile.LocalPort = 15432
+		profile.Kubernetes.ResourceType = "service"
+		profile.Kubernetes.RemotePort = 5432
+	case "kube-pod":
+		profile = domain.PrepareProfileForType(profile, domain.TunnelTypeKubernetesPortForward)
+		profile.LocalPort = 18080
+		profile.Kubernetes.ResourceType = "pod"
+		profile.Kubernetes.RemotePort = 8080
+	case "kube-deploy":
+		profile = domain.PrepareProfileForType(profile, domain.TunnelTypeKubernetesPortForward)
+		profile.LocalPort = 18080
+		profile.Kubernetes.ResourceType = "deployment"
+		profile.Kubernetes.RemotePort = 8080
+	}
+
+	return profile
+}
+
+func (e *formEditorState) syncProfileValues(profile domain.Profile) {
+	if e == nil {
+		return
+	}
+
+	profile = domain.PrepareProfileForType(profile, editableTunnelType(profile.Type))
+	e.setValue(editorFieldName, profile.Name)
+	e.setValue(editorFieldDescription, profile.Description)
+	e.setValue(editorFieldLabels, strings.Join(profile.Labels, ", "))
+	e.setValue(editorFieldType, string(profile.Type))
+	e.setValue(editorFieldRestartEnabled, boolEditorValue(profile.Restart.Enabled))
+	e.setValue(editorFieldMaxRetries, strconv.Itoa(profile.Restart.MaxRetries))
+	e.setValue(editorFieldInitialBackoff, profile.Restart.InitialBackoff)
+	e.setValue(editorFieldMaxBackoff, profile.Restart.MaxBackoff)
+
+	switch profile.Type {
+	case domain.TunnelTypeSSHRemote:
+		e.setValue(editorFieldHost, profile.SSHRemote.Host)
+		e.setValue(editorFieldBindAddress, profile.SSHRemote.BindAddress)
+		e.setValue(editorFieldBindPort, strconv.Itoa(profile.SSHRemote.BindPort))
+		e.setValue(editorFieldTargetHost, profile.SSHRemote.TargetHost)
+		e.setValue(editorFieldTargetPort, strconv.Itoa(profile.SSHRemote.TargetPort))
+	case domain.TunnelTypeSSHDynamic:
+		e.setValue(editorFieldHost, profile.SSHDynamic.Host)
+		e.setValue(editorFieldBindAddress, profile.SSHDynamic.BindAddress)
+		e.setValue(editorFieldLocalPort, strconv.Itoa(profile.LocalPort))
+	case domain.TunnelTypeKubernetesPortForward:
+		e.setValue(editorFieldContext, profile.Kubernetes.Context)
+		e.setValue(editorFieldNamespace, profile.Kubernetes.Namespace)
+		e.setValue(editorFieldResourceType, profile.Kubernetes.ResourceType)
+		e.setValue(editorFieldResource, profile.Kubernetes.Resource)
+		e.setValue(editorFieldRemotePort, strconv.Itoa(profile.Kubernetes.RemotePort))
+		e.setValue(editorFieldLocalPort, strconv.Itoa(profile.LocalPort))
+	default:
+		e.setValue(editorFieldHost, profile.SSH.Host)
+		e.setValue(editorFieldRemoteHost, profile.SSH.RemoteHost)
+		e.setValue(editorFieldRemotePort, strconv.Itoa(profile.SSH.RemotePort))
+		e.setValue(editorFieldLocalPort, strconv.Itoa(profile.LocalPort))
+	}
 }
 
 func (e *formEditorState) moveFocus(delta int) {
@@ -1259,7 +1432,7 @@ func (m Model) editorGuideLine() string {
 		if !hasLabel(profile.Labels, "draft") {
 			return ""
 		}
-		field, ok := m.editor.fieldByKey(recommendedProfileEditorField(profile))
+		field, ok := m.editor.fieldByKey(guidedProfileEditorField(profile, m.editor.values[editorFieldQuickFill]))
 		if !ok {
 			return m.t("Guide: finish the key target fields, then save and remove the draft label when ready.", "向导：先补完关键目标字段，准备好后保存并移除 draft 标签。")
 		}
@@ -1539,7 +1712,9 @@ func (m Model) handleEditorKey(msg tea.KeyMsg) (Model, tea.Cmd, bool) {
 	case "left":
 		if field.kind == formFieldChoice {
 			m.editor.cycleChoice(field.key, -1)
-			if field.key == editorFieldType {
+			if field.key == editorFieldQuickFill {
+				m.editor.applySelectedProfileQuickFill(m.language())
+			} else if field.key == editorFieldType {
 				m.editor.rebuild(m.language())
 			}
 		} else {
@@ -1549,7 +1724,9 @@ func (m Model) handleEditorKey(msg tea.KeyMsg) (Model, tea.Cmd, bool) {
 	case "right":
 		if field.kind == formFieldChoice {
 			m.editor.cycleChoice(field.key, 1)
-			if field.key == editorFieldType {
+			if field.key == editorFieldQuickFill {
+				m.editor.applySelectedProfileQuickFill(m.language())
+			} else if field.key == editorFieldType {
 				m.editor.rebuild(m.language())
 			}
 		} else {
@@ -1592,7 +1769,9 @@ func (m Model) handleEditorKey(msg tea.KeyMsg) (Model, tea.Cmd, bool) {
 	case tea.KeySpace:
 		if field.kind == formFieldChoice {
 			m.editor.cycleChoice(field.key, 1)
-			if field.key == editorFieldType {
+			if field.key == editorFieldQuickFill {
+				m.editor.applySelectedProfileQuickFill(m.language())
+			} else if field.key == editorFieldType {
 				m.editor.rebuild(m.language())
 			}
 		} else {
@@ -1605,7 +1784,9 @@ func (m Model) handleEditorKey(msg tea.KeyMsg) (Model, tea.Cmd, bool) {
 			for _, option := range field.options {
 				if strings.HasPrefix(strings.ToLower(option.label), needle) || strings.HasPrefix(strings.ToLower(option.value), needle) {
 					m.editor.setValue(field.key, option.value)
-					if field.key == editorFieldType {
+					if field.key == editorFieldQuickFill {
+						m.editor.applySelectedProfileQuickFill(m.language())
+					} else if field.key == editorFieldType {
 						m.editor.rebuild(m.language())
 					}
 					return m, nil, true

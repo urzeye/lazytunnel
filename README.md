@@ -159,9 +159,11 @@ lazytunnel profile import kube-contexts --kubeconfig ~/.kube/config --overwrite
 Imported profiles are created as editable drafts. SSH imports use a placeholder
 forward target and Kubernetes imports use a placeholder resource target, so
 you'll usually want to refine them before connecting. In the TUI, press `e` to
-finish the selected draft in the built-in form editor, or `E` to jump to raw
-YAML. If the TUI is already open when you import from the CLI, press `g` to
-reload the config after importing.
+finish the selected draft in the built-in form editor, start with `Quick Fill`
+to apply a common SSH or Kubernetes recipe for imported drafts, then adjust the
+real target fields. Press `E` to jump to raw YAML instead. If the TUI is
+already open when you import from the CLI, press `g` to reload the config after
+importing.
 
 Validate your config:
 
@@ -193,7 +195,7 @@ Inside the TUI:
 - press `a` to choose a profile preset for SSH local, SSH remote, SOCKS, or Kubernetes, then finish it in the guided form
 - press `A` to choose a stack preset from the current selection, visible profiles, or running profiles
 - press `s` to seed the sample config when the workspace is empty
-- press `e` to open the guided form editor for the selected profile or stack
+- press `e` to open the guided form editor for the selected profile or stack; imported drafts open on `Quick Fill` first
 - press `E` to open the raw YAML config in your external editor
 - inside details, press `y` to copy the selected profile command, or the selected stack member command
 - inside the logs inspector, use `f` to follow/pause, `t` / `T` to cycle sources, `w` to wrap or truncate, `n` / `N` to jump between filter hits, `y` to copy visible logs, `o` to export them, and `x` to clear them
@@ -212,7 +214,7 @@ LazyTunnel is designed around a few strong workflows:
 - filter logs by text and source, highlight matches, and jump across hits from the logs inspector
 - create new profiles and stacks from guided presets instead of starting from a blank YAML draft
 - import draft profiles from `~/.ssh/config` and kubeconfig contexts from the CLI or TUI
-- finish imported drafts in a built-in TUI form editor or from `profile edit --interactive`
+- finish imported drafts in a built-in TUI form editor with `Quick Fill` recipes, or from `profile edit --interactive`
 - run preflight checks for local port conflicts, missing `ssh` / `kubectl`, SSH alias and key-path issues, and Kubernetes target mismatches before startup
 - show actionable validation hints that point to the next fix
 - copy generated exec commands, copy or export visible logs, and clear captured logs directly from the TUI

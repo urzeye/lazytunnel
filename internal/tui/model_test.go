@@ -394,7 +394,7 @@ func TestRenderProfileDetailLinesShowsDraftGuideForImportedDraft(t *testing.T) {
 
 	model := Model{service: service}
 	rendered := strings.Join(model.renderProfileDetailLines(service.ProfileViews()[0], 100), "\n")
-	for _, snippet := range []string{"Draft Guide", "Remote Host", "~/.ssh/config"} {
+	for _, snippet := range []string{"Draft Guide", "Quick Fill", "~/.ssh/config"} {
 		if !strings.Contains(rendered, snippet) {
 			t.Fatalf("expected %q in draft guide, got %q", snippet, rendered)
 		}
@@ -2397,7 +2397,35 @@ func TestCreateStarterProfileDraftFocusesRecommendedField(t *testing.T) {
 	}
 }
 
-func TestBeginProfileEditorGuidesImportedKubernetesDraftToResource(t *testing.T) {
+func TestBeginProfileEditorGuidesImportedSSHDraftToQuickFill(t *testing.T) {
+	t.Parallel()
+
+	model := Model{}
+	model = model.beginProfileEditor(domain.Profile{
+		Name:      "bastion-prod",
+		Type:      domain.TunnelTypeSSHLocal,
+		LocalPort: 18080,
+		Labels:    []string{"draft", "imported", "ssh-config"},
+		SSH: &domain.SSHLocal{
+			Host:       "bastion-prod",
+			RemoteHost: "127.0.0.1",
+			RemotePort: 80,
+		},
+	}, "bastion-prod")
+
+	field, ok := model.editor.currentField()
+	if !ok {
+		t.Fatal("expected active editor field")
+	}
+	if field.key != editorFieldQuickFill {
+		t.Fatalf("expected imported SSH draft to focus Quick Fill, got %q", field.key)
+	}
+	if guide := model.editorGuideLine(); !strings.Contains(guide, "Quick Fill") {
+		t.Fatalf("expected guide line to mention Quick Fill, got %q", guide)
+	}
+}
+
+func TestBeginProfileEditorGuidesImportedKubernetesDraftToQuickFill(t *testing.T) {
 	t.Parallel()
 
 	model := Model{}
@@ -2419,11 +2447,106 @@ func TestBeginProfileEditorGuidesImportedKubernetesDraftToResource(t *testing.T)
 	if !ok {
 		t.Fatal("expected active editor field")
 	}
-	if field.key != editorFieldResource {
-		t.Fatalf("expected imported kube draft to focus Resource, got %q", field.key)
+	if field.key != editorFieldQuickFill {
+		t.Fatalf("expected imported kube draft to focus Quick Fill, got %q", field.key)
 	}
-	if guide := model.editorGuideLine(); !strings.Contains(guide, "Resource") {
-		t.Fatalf("expected guide line to mention Resource, got %q", guide)
+	if guide := model.editorGuideLine(); !strings.Contains(guide, "Quick Fill") {
+		t.Fatalf("expected guide line to mention Quick Fill, got %q", guide)
+	}
+}
+
+func TestProfileEditorQuickFillAppliesImportedSSHRecipe(t *testing.T) {
+	t.Parallel()
+
+	model := Model{}
+	model = model.beginProfileEditor(domain.Profile{
+		Name:      "bastion-prod",
+		Type:      domain.TunnelTypeSSHLocal,
+		LocalPort: 18080,
+		Labels:    []string{"draft", "imported", "ssh-config"},
+		SSH: &domain.SSHLocal{
+			Host:       "bastion-prod",
+			RemoteHost: "127.0.0.1",
+			RemotePort: 80,
+		},
+	}, "bastion-prod")
+
+	next, _, handled := model.handleEditorKey(tea.KeyMsg{Type: tea.KeyRight})
+	if !handled {
+		t.Fatal("expected Quick Fill choice change to be handled")
+	}
+	if got := next.editor.values[editorFieldQuickFill]; got != "ssh-db" {
+		t.Fatalf("expected Quick Fill to switch to ssh-db, got %q", got)
+	}
+
+	profile, err := next.editor.profileFromValues(false)
+	if err != nil {
+		t.Fatalf("profileFromValues(false): %v", err)
+	}
+	if profile.Type != domain.TunnelTypeSSHLocal {
+		t.Fatalf("expected ssh local type after quick fill, got %q", profile.Type)
+	}
+	if profile.LocalPort != 15432 {
+		t.Fatalf("expected local port 15432 after quick fill, got %d", profile.LocalPort)
+	}
+	if profile.SSH == nil {
+		t.Fatal("expected SSH settings after quick fill")
+	}
+	if profile.SSH.Host != "bastion-prod" || profile.SSH.RemoteHost != "127.0.0.1" || profile.SSH.RemotePort != 5432 {
+		t.Fatalf("unexpected SSH quick fill profile: %#v", profile.SSH)
+	}
+	if guide := next.editorGuideLine(); !strings.Contains(guide, "Remote Host") {
+		t.Fatalf("expected guide line to move on to Remote Host, got %q", guide)
+	}
+}
+
+func TestProfileEditorQuickFillAppliesImportedKubernetesRecipe(t *testing.T) {
+	t.Parallel()
+
+	model := Model{}
+	model = model.beginProfileEditor(domain.Profile{
+		Name:      "dev-cluster",
+		Type:      domain.TunnelTypeKubernetesPortForward,
+		LocalPort: 15432,
+		Labels:    []string{"draft", "imported", "kube-context"},
+		Kubernetes: &domain.Kubernetes{
+			Context:      "dev-cluster",
+			Namespace:    "backend",
+			ResourceType: "service",
+			Resource:     "change-me",
+			RemotePort:   80,
+		},
+	}, "dev-cluster")
+
+	next, _, handled := model.handleEditorKey(tea.KeyMsg{Type: tea.KeyRight})
+	if !handled {
+		t.Fatal("expected Quick Fill choice change to be handled")
+	}
+	if got := next.editor.values[editorFieldQuickFill]; got != "kube-http" {
+		t.Fatalf("expected Quick Fill to switch to kube-http, got %q", got)
+	}
+
+	profile, err := next.editor.profileFromValues(false)
+	if err != nil {
+		t.Fatalf("profileFromValues(false): %v", err)
+	}
+	if profile.Type != domain.TunnelTypeKubernetesPortForward {
+		t.Fatalf("expected kube type after quick fill, got %q", profile.Type)
+	}
+	if profile.LocalPort != 18080 {
+		t.Fatalf("expected local port 18080 after quick fill, got %d", profile.LocalPort)
+	}
+	if profile.Kubernetes == nil {
+		t.Fatal("expected Kubernetes settings after quick fill")
+	}
+	if profile.Kubernetes.Context != "dev-cluster" || profile.Kubernetes.Namespace != "backend" {
+		t.Fatalf("expected kube quick fill to preserve context and namespace, got %#v", profile.Kubernetes)
+	}
+	if profile.Kubernetes.ResourceType != "service" || profile.Kubernetes.Resource != "change-me" || profile.Kubernetes.RemotePort != 80 {
+		t.Fatalf("unexpected kube quick fill profile: %#v", profile.Kubernetes)
+	}
+	if guide := next.editorGuideLine(); !strings.Contains(guide, "Resource") {
+		t.Fatalf("expected guide line to move on to Resource, got %q", guide)
 	}
 }
 

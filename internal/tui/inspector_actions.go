@@ -207,7 +207,7 @@ func (m Model) renderProfileDraftGuideLines(view app.ProfileView, width int) []s
 	}
 
 	editor := newProfileEditorState(view.Profile, view.Profile.Name, m.language())
-	nextKey := recommendedProfileEditorField(view.Profile)
+	nextKey := guidedProfileEditorField(view.Profile, defaultProfileQuickFillValue(view.Profile))
 	field, ok := editor.fieldByKey(nextKey)
 	nextLabel := m.t("important fields", "关键字段")
 	if ok {
@@ -216,7 +216,7 @@ func (m Model) renderProfileDraftGuideLines(view app.ProfileView, width int) []s
 
 	lines := []string{groupTitleStyle.Render(m.t("Draft Guide", "草稿向导"))}
 	lines = append(lines, renderCompactKeyValue(m.t("Next", "下一步"), nextLabel, width))
-	lines = append(lines, renderCompactKeyValue(m.t("Action", "动作"), m.profileDraftGuideAction(view.Profile, nextLabel), width))
+	lines = append(lines, renderCompactKeyValue(m.t("Action", "动作"), m.profileDraftGuideAction(view.Profile, nextKey, nextLabel), width))
 	return lines
 }
 
@@ -461,8 +461,12 @@ func plainLogSourceLabel(source domain.LogSource) string {
 	}
 }
 
-func (m Model) profileDraftGuideAction(profile domain.Profile, nextLabel string) string {
+func (m Model) profileDraftGuideAction(profile domain.Profile, nextKey, nextLabel string) string {
 	switch {
+	case hasTUILabel(profile.Labels, "ssh-config") && nextKey == editorFieldQuickFill:
+		return m.t("Press e to pick a Quick Fill recipe first, then finish the real SSH target fields.", "按 e 先选一个快速补全模板，再补上真实的 SSH 目标字段。")
+	case hasTUILabel(profile.Labels, "kube-context") && nextKey == editorFieldQuickFill:
+		return m.t("Press e to pick a Quick Fill recipe first, then replace the placeholder Kubernetes resource before connecting.", "按 e 先选一个快速补全模板，再把占位的 Kubernetes 资源改成真实值。")
 	case hasTUILabel(profile.Labels, "ssh-config"):
 		return m.tf("Press e to confirm %s and replace the placeholder SSH target imported from ~/.ssh/config.", "按 e 确认 %s，并把从 ~/.ssh/config 导入的占位目标改成真实值。", nextLabel)
 	case hasTUILabel(profile.Labels, "kube-context"):
